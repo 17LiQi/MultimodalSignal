@@ -1,0 +1,12 @@
+# 项目根目录配置
+project_root: "."  # 当前目录（
+
+# 数据目录配置
+data_dir:
+  name: "WESAD"      # 数据目录名称
+
+# 源代码目录配置
+src_dir:
+  name: "src"
+  modules:
+    utils: "utils"

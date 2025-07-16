@@ -1,0 +1,16 @@
+# requirements.txt
+# 基础包
+numpy # 2.2.6
+pandas # 2.3.1
+jupyter # 1.1.1
+matplotlib # 3.10.3
+scipy # 1.15.3
+
+# 核心包
+# PyTorch with CUDA 11.8 support
+torch==2.4.0
+torchvision
+torchaudio
+
+# 配置包
+PyYAML # 6.0.2
