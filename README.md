@@ -16,7 +16,6 @@
 
 ## 数据集资源
 - **详细文档**：[WESAD官方说明](https://ubi29.informatik.uni-siegen.de/usi/data_wesad.html)
-- **GitHub地址**: [GitHub-WJMatthew/WESAD](https://github.com/WJMatthew/WESAD)
 - **数据预览**：[交互式可视化数据预览](https://kristofvl.github.io/wesadviz/)
 - **下载地址**：[Sciebo云存储](https://uni-siegen.sciebo.de/s/HGdUkoNlW1Ub0Gx)
 
@@ -37,13 +36,13 @@ conda activate emo-env
 ### 2. 安装依赖包
 #### 方法1：临时使用镜像源
 ```bash
-pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
+pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
 ```
 
 #### 方法2：配置全局镜像源
 ```bash
-pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/
-pip config set install.trusted-host mirrors.aliyun.com
+pip config set global.index-url https:https://pypi.tuna.tsinghua.edu.cn/simple
+pip config set install.trusted-host pypi.tuna.tsinghua.edu.cn
 
 pip install -r requirements.txt
 ```
@@ -63,5 +62,24 @@ python check_env.py
 ```
 
 ## 备注
-- 若依赖安装失败，可尝试替换为其他镜像源（如清华源：`https://pypi.tuna.tsinghua.edu.cn/simple`）
+- 若依赖安装失败，可尝试替换为其他镜像源（如阿里源：`https://mirrors.aliyun.com/pypi/simple/` ）
 - 首次运行前请确保数据集已下载并放置在项目指定路径（建议在项目根目录下）
+
+## 常见问题
+1. 无法安装Pytorch或只能安装CPU版
+- 解决方法:
+- 尝试使用其他镜像源，如阿里源：`https://mirrors.aliyun.com/pypi/simple/` 或者官网下载
+- 或直接从指定源下载安装包安装
+```bash
+pip install https://mirrors.aliyun.com/pytorch-wheels/cu121/torch-2.4.0+cu121-cp310-cp310-win_amd64.whl 
+```
+
+2. Pytorch 找不到指定的模块, 这可能是由于镜像源问题导致的, 如:
+```bash
+oserror: [winerror 126] 找不到指定的模块: error loading "\miniconda3\envs\emo-env\lib\site-packages\torch\lib\fbgemm.dll" or one of its dependencies. 
+```
+- 解决方法: 
+- 下载 dll 文件依赖分析工具 Dependencies: https://github.com/lucasg/Dependencies/releases/tag/v1.11.1
+- 选择合适的版本,如 x64_Release.zip
+- 运行 DependenciesGui.exe 点击 File -> Open -> 选择 dll 文件 -> 点击 Analyze ,根据缺失的文件提示单独安装
+

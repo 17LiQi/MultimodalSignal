@@ -1,3 +1,4 @@
+# src/utils/path_manager.py
 from pathlib import Path
 import yaml
 
@@ -32,12 +33,26 @@ class PathManager:
         self.PROJECT_ROOT = self._project_root
 
         # 数据集目录
+        wesad_cfg = self._config.get("wesad_dir", {})
+        self.WESAD_ROOT = self._project_root / wesad_cfg.get("name", "WESAD")
+        
+        # 预处理数据目录
         data_cfg = self._config.get("data_dir", {})
-        self.WESAD_ROOT = self._project_root / data_cfg.get("name", "WESAD")
+        data_root = self._project_root / data_cfg.get("name", "data")
+
+        self.DATA_ROOT = data_root
+        self.DATA_FEATURE = data_root / "feature_fusion"
+        self.DATA_EARLY = data_root / "early_fusion"
 
         # 主目录
         src_cfg = self._config.get("src_dir", {})
         self.SRC_ROOT = self._project_root / src_cfg.get("name", "src")
 
+        # 工具模块目录
+        modules = src_cfg.get("modules", {})
+        self.UTILS_ROOT = self.SRC_ROOT / modules.get("utils", "utils")
+        self.OUTPUT_ROOT = self.SRC_ROOT / modules.get("output", "output")
+
 def get_path_manager(config_file: Path = None) -> PathManager:
     return PathManager(config_file)
+

@@ -1,20 +1,26 @@
 import importlib.util
 import sys
+import torch
 
 
 MAIN_DEPENDENCIES = [
     "torch",  # PyTorch框架
+
     "numpy",  # 数值计算库
     "pandas",  # 数据处理库
     "matplotlib",  # 可视化库
+    "scipy",  # 科学计算库
+    "seaborn",  # 数据可视化库
+
     "jupyter",  # Jupyter核心
     "jupyterlab",  # JupyterLab界面
     "ipykernel",  # Jupyter内核
     "notebook",  # Jupyter Notebook
-    "scipy",  # 科学计算库
-    "requests",  # HTTP请求库
     "sklearn",  # 机器学习库（scikit-learn）
-    "tensorboard",  # 训练可视化工具
+
+    # "neurokit2",
+    "yaml",  # PyYAML库
+    "omegaconf",  # OmegaConf库
 ]
 
 
@@ -34,9 +40,16 @@ def verify_import(package_name: str) -> bool:
 
 
 def main():
-    print("开始验证主要依赖...")
+    print("=========开始验证依赖========")
+    print("\n===验证PyTorch以及CUDA状态===")
+    print("PyTorch version:", torch.__version__)
+    print("CUDA available:", torch.cuda.is_available())
+    print("CUDA version:", torch.version.cuda)
+    print("GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "No GPU")
+
     all_passed = True
 
+    print("========验证主要依赖========")
     for package in MAIN_DEPENDENCIES:
         result = verify_import(package)
         status = "成功" if result else "失败"
