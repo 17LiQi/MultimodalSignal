@@ -1,0 +1,30 @@
+# configs/exp_3channel_resnet.yaml
+
+defaults:
+  - base_config
+
+# --- 数据集配置 ---
+dataset:
+  # 使用全部受试者数据
+  # 使用3个通道
+  channels_to_use: ['chest_ECG', 'wrist_BVP', 'chest_EDA']
+
+# --- 模型配置 ---
+model:
+  name: "resnet_1d" # ResNet 模型
+  params:
+    in_channels: 3 # 输入 3 通道
+    num_classes: 3
+
+
+# --- 训练器配置 ---
+trainer:
+  # 对于更深的模型，可能需要更多的 epochs 或不同的学习率
+  epochs: 70
+  learning_rate: 0.0005
+  early_stopping:
+    patience: 10 # 深层模型可能需要更多的耐心
+
+# --- 融合方式 ---
+fusion:
+  type: "early"

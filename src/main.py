@@ -1,10 +1,12 @@
 # main.py
+from collections import Counter
 
 import yaml
 import pickle
 import numpy as np
 from omegaconf import OmegaConf
 from pathlib import Path
+from datetime import datetime
 from sklearn.model_selection import train_test_split
 import torch
 from torch.utils.data import DataLoader
@@ -13,11 +15,12 @@ from sklearn.preprocessing import StandardScaler
 # --- 从项目中导入自定义模块 ---
 from dataset.wesad_dataset import WesadEarlyFusionDataset
 from models.cnn_1d import SimpleCNN1D
+from models.resnet_1d import ResNet1D
 from trainer.trainer import Trainer
 from utils.path_manager import get_path_manager  # 导入您自己的路径管理器
 
 
-def run_fold(config, test_subject, all_subjects, paths):
+def run_fold(config, test_subject, all_subjects, paths ,run_output_dir):
     """
     运行单次留一法交叉验证的折叠 (fold)。
     这个函数封装了针对一个特定测试受试者的完整“训练-验证-测试”流程。
@@ -36,8 +39,11 @@ def run_fold(config, test_subject, all_subjects, paths):
     # --- 1. 设置路径 ---
     # 定义预处理数据的根目录
     processed_path = paths.DATA_ROOT
-    # 定义本次折叠的结果输出目录，路径中包含了数据集,模型和测试对象
-    output_path = paths.OUTPUT_ROOT / config.dataset.name / config.model.name / f'test_on_{test_subject}'
+    # 在主运行目录下，为此折叠的输出创建子目录
+    fold_output_dir = run_output_dir / f'fold_test_on_{test_subject}'
+    fold_output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"\n===== 开始处理折叠: 测试集=[{test_subject}] | 输出至: {fold_output_dir} =====")
 
     # --- 2. 动态数据集划分 ---
     print(f"\n===== 开始处理折叠: 测试集=[{test_subject}] =====")
@@ -53,6 +59,25 @@ def run_fold(config, test_subject, all_subjects, paths):
     )
     print(f"训练集 ({len(train_subjects)}): {train_subjects}")
     print(f"验证集 ({len(val_subjects)}): {val_subjects}")
+
+    # --- 验证训练集的类别分布 ---
+    print("--- 验证训练集类别分布 ---")
+    all_train_labels = []
+    data_folder_for_check = paths.DATA_ROOT / config.dataset.name
+    for sid in train_subjects:
+        y = np.load(data_folder_for_check / f'{sid}_y.npy')
+        all_train_labels.append(y)
+
+    all_train_labels = np.concatenate(all_train_labels, axis=0)
+    label_counts = Counter(all_train_labels)
+
+    print(f"当前折叠 (测试集: {test_subject}) 的训练集标签分布:")
+    print(f"  - 类别 0 (Neutral): {label_counts.get(0, 0)} 个样本")
+    print(f"  - 类别 1 (Amusement): {label_counts.get(1, 0)} 个样本")
+    print(f"  - 类别 2 (Stress): {label_counts.get(2, 0)} 个样本")
+    if label_counts.get(1, 0) < label_counts.get(0, 0) * 0.5 and label_counts.get(1, 0) < label_counts.get(2, 0) * 0.5:
+        print("\033[93m警告: 类别 1 (Amusement) 样本数量显著偏少，可能导致模型无法有效学习该类别。\033[0m")
+    print("-" * 30)
 
     # --- 3. 准备数据加载所需的资源 ---
     data_folder = processed_path / config.dataset.name
@@ -130,25 +155,31 @@ def run_fold(config, test_subject, all_subjects, paths):
             in_channels=len(config.dataset.channels_to_use),  # 输入通道数由配置动态决定
             num_classes=config.model.params.num_classes
         )
-    # elif config.model.name == "gru":
-    #     model = GRUModel(...) # (未来扩展)
+    elif config.model.name == "resnet_1d":  # <--- 新增的逻辑分支
+        model = ResNet1D(
+            in_channels=len(config.dataset.channels_to_use),
+            num_classes=config.model.params.num_classes
+        )
     else:
         raise ValueError(f"未知模型: {config.model.name}")
 
     # 支持 GPU(如果可用)
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model.to(device)
-    print(f"当前使用设备: {device}")
 
     # --- 7. 创建训练器并启动训练和评估流程 ---
-    trainer = Trainer(model, config, output_path)
+    # <-- 2. 将折叠的输出目录传递给 Trainer
+
+    trainer = Trainer(model, config, fold_output_dir)
     trainer.train(train_loader, val_loader)
+
+    print(f"--- 开始在测试集 {test_subject} 上进行评估 ---")
 
     # 测试集评估
     test_loss, test_acc, test_f1 = trainer.evaluate(test_loader, is_test=True)
 
     # 记录测试结果到单独文件
-    fold_result_file = output_path / 'test_results.txt'
+    fold_result_file = fold_output_dir  / 'test_results.txt'
     with open(fold_result_file, 'w') as f:
         f.write(f"Test Subject: {test_subject}\n")
         f.write(f"Test Loss: {test_loss:.4f}\n")
@@ -161,15 +192,15 @@ def run_fold(config, test_subject, all_subjects, paths):
 if __name__ == '__main__':
     # --- A. 加载配置 ---
     # 使用 OmegaConf 加载基础配置和指定的实验配置
-    # 这种方式可以轻松地通过修改 'exp_ecg_cnn.yaml' 来运行不同的实验
+    # 这种方式可以轻松地通过修改 'ecg_cnn.yaml' 来运行不同的实验
+    base_conf = OmegaConf.load('configs/base_config.yaml')
+    exp_conf = OmegaConf.load('configs/3channel_resnet.yaml')
     try:
-        base_conf = OmegaConf.load('configs/base_config.yaml')
-        exp_conf = OmegaConf.load('configs/ecg_cnn.yaml')
         # 合并配置，实验配置会覆盖基础配置中的同名参数
         config = OmegaConf.merge(base_conf, exp_conf)
         print(f"配置已加载, 当前配置:{exp_conf}")
     except FileNotFoundError as e:
-        print(f"错误: 无法找到配置文件。请确保 'configs/base_config.yaml' 和 'configs/ecg_cnn.yaml' 存在。")
+        print(f"错误: 无法找到配置文件。请确保 {base_conf} 和 {exp_conf} 存在。")
         exit()
 
     # --- B. 初始化 ---
@@ -185,7 +216,11 @@ if __name__ == '__main__':
         torch.backends.cudnn.deterministic = True  # 确保 GPU 计算可复现
         torch.backends.cudnn.benchmark = False  # 禁用优化以保证可复现性
 
-    # 获取所有受试者列表
+    run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    run_output_dir = paths.OUTPUT_ROOT / config.dataset.name / config.model.name / f'run_{run_timestamp}'
+    run_output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"====== 本次交叉验证运行结果将保存至: {run_output_dir} ======")
+
     all_subjects = config.dataset.all_subjects
     all_fold_accs = []
     all_fold_f1s = []
@@ -193,17 +228,15 @@ if __name__ == '__main__':
     # --- C. 执行留一法交叉验证 (LOSOCV) 循环 ---
     print("====== 开始留一法交叉验证 (LOSOCV) ======")
     for subject_to_test in all_subjects:
-        # 运行一个完整的折叠 (训练+验证+测试)
-        acc, f1 = run_fold(config, subject_to_test, all_subjects, paths)
-
-        # 收集该折叠的结果
+        # <-- 3. 将主运行目录传递给 run_fold
+        acc, f1 = run_fold(config, subject_to_test, all_subjects, paths, run_output_dir)
         all_fold_accs.append(acc)
         all_fold_f1s.append(f1)
 
     # --- D. 汇总并打印最终结果 ---
     print("\n\n====== 留一法交叉验证全部完成 ======")
     # 保存所有折叠的汇总结果
-    summary_file = paths.OUTPUT_ROOT / config.dataset.name / config.model.name / 'cv_summary.txt'
+    summary_file = run_output_dir / 'cv_summary.txt'
     with open(summary_file, 'w') as f:
         f.write(f"实验配置: {config.dataset.name} - {config.model.name} - Channels: {config.dataset.channels_to_use}\n")
         f.write("\n每个折叠的详细结果:\n")

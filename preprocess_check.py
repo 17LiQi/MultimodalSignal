@@ -54,38 +54,6 @@ try:
 except FileNotFoundError:
     print("错误: 未找到 early_fusion 的 .npy 文件。请先运行 preprocess.py。\n")
 
-# --- 3. 检查并使用 Scaler 文件 ---
-print("--- 3. 检查并使用 Scaler 文件 ---")
-try:
-    # 加载 scaler 对象
-    with open(PROCESSED_DATA_PATH / 'feature_fusion' / 'scaler.pkl', 'rb') as f:
-        scaler = pickle.load(f)
-
-    print(f"成功加载 Scaler 对象: {type(scaler)}")
-
-    # 检查 scaler 内部学习到的参数
-    mean_vector = scaler.mean_
-    std_vector = scaler.scale_
-    print(f"Scaler 学习到的均值向量形状: {mean_vector.shape}")
-    assert mean_vector.shape[0] == 48, "Scaler的特征维度不匹配!"
-
-    # 演示如何使用 scaler
-    print("\n演示 Scaler 的作用:")
-    # 取出第一个窗口的原始特征
-    original_sample = x_feat[0, :5]  # 只看前5个特征
-    print(f"归一化前 (原始特征): {np.round(original_sample, 4)}")
-
-    # 使用加载的 scaler 对所有测试数据进行转换
-    x_feat_scaled = scaler.transform(x_feat)
-
-    # 查看同一个窗口转换后的特征
-    scaled_sample = x_feat_scaled[0, :5]
-    print(f"归一化后 (Z-scores):  {np.round(scaled_sample, 4)}")
-    print("-> 结果符合预期：Scaler 已加载，并能成功将原始特征转换为均值接近0、标准差接近1的数据。\n")
-
-except FileNotFoundError:
-    print("错误: 未找到 scaler.pkl 文件。请确保已运行 preprocess.py 并生成了 scaler。\n")
-
 
 def parse_quest_csv(subject_id: str, wesad_root: Path) -> pd.DataFrame:
     quest_path = wesad_root / subject_id / f"{subject_id}_quest.csv"

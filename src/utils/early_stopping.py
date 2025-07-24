@@ -6,7 +6,7 @@ import torch
 class EarlyStopping:
     """早停法以防止过拟合，并在验证损失不再改善时停止训练。"""
 
-    def __init__(self, patience=5, delta=0, checkpoint_path='checkpoint.pt', verbose=True, mode='min'):
+    def __init__(self, patience=5, delta=0, checkpoint_path='checkpoint.pt', verbose=True, mode='min', log_func=print):
         """
         参数:
             patience (int): 验证性能在多少个epoch内没有提升就停止训练
@@ -20,6 +20,7 @@ class EarlyStopping:
         self.checkpoint_path = checkpoint_path
         self.verbose = verbose
         self.mode = mode
+        self.log_func = log_func
 
         self.counter = 0
         self.best_score = np.Inf if self.mode == 'min' else -np.Inf
@@ -42,11 +43,11 @@ class EarlyStopping:
         if score_improved:
             self.counter = 0
             if self.verbose:
-                print(f'  - Val score improved ({self.best_score:.6f}). Saving model...')
+                self.log_func(f'  - EarlyStopping: Val score improved ({self.best_score:.6f}). Saving model...')
             torch.save(model.state_dict(), self.checkpoint_path)
         else:
             self.counter += 1
             if self.verbose:
-                print(f'  - EarlyStopping counter: {self.counter} out of {self.patience}')
+                self.log_func(f'  - EarlyStopping: Counter {self.counter} out of {self.patience}')
             if self.counter >= self.patience:
                 self.early_stop = True

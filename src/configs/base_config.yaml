@@ -36,7 +36,7 @@ trainer:
   # 批大小
   batch_size: 64
   # 数据加载器的工作线程数
-  num_workers: 4
+  num_workers: 0  # 增加了线程会导致tqdm进度条显示异常,而且线程数越多，速度反而越慢
 
   # --- 早停 (Early Stopping) 配置 ---
   early_stopping:

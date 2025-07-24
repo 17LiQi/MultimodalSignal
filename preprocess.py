@@ -64,8 +64,16 @@ class WesadPreprocessor:
         # 定义窗口化策略
         self.WINDOW_SEC = 30
         self.TARGET_FS = 64
-        self.TASK_STEPS_SEC = {'Base': 15, 'TSST': 5, 'Fun': 15, 'sRead': 5, 'Medi 1': 15, 'Medi 2': 15, 'fRead': 5,
-                               'bRead': 5}
+        self.TASK_STEPS_SEC = {
+            'Base': 15,  # 长时任务，稀疏采样
+            'TSST': 5,  # 短时任务/核心任务，密集采样
+            'Fun': 5,  # 修改为 5，密集采样
+            'sRead': 5,
+            'Medi 1': 15,  # 长时任务，稀疏采样
+            'Medi 2': 15,  # 长时任务，稀疏采样
+            'fRead': 5,
+            'bRead': 5
+        }
 
         # 定义标签映射 (2:stress, 1:amusement, 0:baseline/neutral)
         self.LABEL_MAP = {1: 0, 2: 2, 3: 1, 4: 0}
@@ -78,16 +86,14 @@ class WesadPreprocessor:
 
         warnings.filterwarnings('ignore', category=FutureWarning)
 
-    # 在 WesadPreprocessor 类中，找到 _get_windows 方法并替换它
-
     def _get_windows(self, data_len, protocol_df, original_fs):
         """根据协议和可变步长策略生成窗口索引。"""
         windows = []
         labels = []
-        task_to_label_map = {'Base': 1, 'TSST': 2, 'Fun': 3, 'Medi1': 4, 'Medi2': 4}  # *** 修改点1: 字典键也去除空格 ***
+        task_to_label_map = {'Base': 1, 'TSST': 2, 'Fun': 3, 'Medi1': 4, 'Medi2': 4}  # 字典键也去除空格
 
         for _, row in protocol_df.iterrows():
-            # *** 修改点2: 对从DataFrame中读取的任务名也去除空格和多余字符 ***
+            # 对从DataFrame中读取的任务名也去除空格和多余字符
             task = row['task'].replace(" ", "").strip()
 
             # 我们只处理基线、压力、娱乐和冥想这几个核心状态
