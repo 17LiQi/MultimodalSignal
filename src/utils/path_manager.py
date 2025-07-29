@@ -41,8 +41,8 @@ class PathManager:
         data_root = self._project_root / data_cfg.get("name", "data")
 
         self.DATA_ROOT = data_root
-        self.DATA_FEATURE = data_root / "feature_fusion"
-        self.DATA_EARLY = data_root / "early_fusion"
+        self.DATA_FEATURE = data_root / "wesad_feature_fusion"
+        self.DATA_EARLY = data_root / "wesad_early_fusion"
 
         # 主目录
         src_cfg = self._config.get("src_dir", {})

@@ -1,0 +1,33 @@
+# configs/feature_gru.yaml
+
+defaults:
+  - base_config
+
+dataset:
+  name: "wesad_feature_fusion" # 数据源仍然是 feature_fusion
+  channels_to_use: null
+  # --- 新增: 序列化参数 ---
+  sequence_params:
+    sequence_length: 10 # 每个样本看过去10个窗口 (即5分钟的数据)
+    step: 1             # 序列之间只滑动1个窗口
+
+model:
+  name: "feature_gru"
+  params:
+    in_features: 24
+    num_classes: 3
+    hidden_size: 128
+    num_layers: 2
+    dropout: 0.5
+
+trainer:
+  epochs: 100
+  learning_rate: 0.001
+  batch_size: 128 # 序列模型通常需要稍小一些的 batch size
+  early_stopping:
+    patience: 15
+    monitor: 'val_loss'
+    mode: 'min'
+
+fusion:
+  type: "feature_sequence" # <--- 定义一个新的融合类型，以便 main.py 识别

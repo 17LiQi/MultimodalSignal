@@ -1,3 +1,4 @@
+# preprocess.py
 import pickle
 import numpy as np
 import pandas as pd
@@ -6,6 +7,7 @@ from pathlib import Path
 from scipy import signal
 from sklearn.preprocessing import StandardScaler
 import warnings
+import neurokit2 as nk
 
 
 # --- 1. 辅助函数 ---
@@ -52,6 +54,8 @@ class WesadPreprocessor:
     def __init__(self, wesad_root, output_root):
         self.wesad_root = Path(wesad_root)
         self.output_root = Path(output_root)
+        self.feature_fusion_path = self.output_root / 'wesad_feature_fusion'
+        self.early_fusion_path = self.output_root / 'wesad_early_fusion'
 
         # 定义信号源和采样率
         self.CHEST_FS = 700
@@ -79,12 +83,13 @@ class WesadPreprocessor:
         self.LABEL_MAP = {1: 0, 2: 2, 3: 1, 4: 0}
 
         # 创建输出目录
-        self.early_fusion_path = self.output_root / 'early_fusion'
-        self.feature_fusion_path = self.output_root / 'feature_fusion'
-        self.early_fusion_path.mkdir(parents=True, exist_ok=True)
-        self.feature_fusion_path.mkdir(parents=True, exist_ok=True)
+        (self.output_root / 'wesad_early_fusion').mkdir(parents=True, exist_ok=True)
+        (self.output_root / 'wesad_feature_fusion').mkdir(parents=True, exist_ok=True)
 
+        # 抑制 NeuroKit2 的警告
         warnings.filterwarnings('ignore', category=FutureWarning)
+        warnings.filterwarnings('ignore', category=UserWarning, module='neurokit2')  # 抑制 NeuroKit2 的 UserWarning
+        warnings.filterwarnings('ignore', category=RuntimeWarning, module='neurokit2')  # 抑制 NeuroKit2 的 RuntimeWarning
 
     def _get_windows(self, data_len, protocol_df, original_fs):
         """根据协议和可变步长策略生成窗口索引。"""
@@ -110,7 +115,7 @@ class WesadPreprocessor:
             end_idx = int(row['end_min'] * 60 * original_fs)
 
             # 查找任务对应的步长，如果任务名不在字典中，提供一个默认值
-            step_sec = self.TASK_STEPS_SEC.get(row['task'], self.WINDOW_SEC / 2)  # *** 修改点3: 使用原始任务名(带空格)来查找步长 ***
+            step_sec = self.TASK_STEPS_SEC.get(row['task'], self.WINDOW_SEC / 2)  # 使用原始任务名(带空格)来查找步长 ***
             step_samples = int(step_sec * original_fs)
             window_samples = int(self.WINDOW_SEC * original_fs)
 
@@ -124,17 +129,98 @@ class WesadPreprocessor:
                 labels.append(label)
 
         return windows, np.array(labels)
-    def _extract_features(self, window_data):
-        """为一个窗口数据提取统计特征。"""
-        features = []
-        # 处理多轴信号 (如ACC)
-        if window_data.ndim > 1:
-            for i in range(window_data.shape[1]):
-                axis_data = window_data[:, i]
-                features.extend([np.mean(axis_data), np.std(axis_data), np.min(axis_data), np.max(axis_data)])
-        else:
-            features.extend([np.mean(window_data), np.std(window_data), np.min(window_data), np.max(window_data)])
-        return features
+
+    def _extract_features_nk(self, window_data_dict):
+        """
+        使用 NeuroKit2 为一个30秒窗口提取高级特征。
+        接收一个包含不同模态原始信号段的字典。
+        """
+        all_features = []
+
+        # --- 1. HRV/PRV 特征 (从 ECG 或 BVP) ---
+        # 优先使用 ECG，如果不可用则使用 BVP
+        ecg_signal = window_data_dict.get('chest_ECG')
+        bvp_signal = window_data_dict.get('wrist_BVP')
+
+        hrv_features = {}
+        # np.full 创建一个用 NaN 填充的数组，用于处理错误
+        nan_placeholder = np.full(10, np.nan)  # 假设提取10个HRV特征
+
+        try:
+            if ecg_signal is not None:
+                hrv_df = nk.hrv(ecg_signal, sampling_rate=self.CHEST_FS, show=False)
+            elif bvp_signal is not None:
+                hrv_df = nk.hrv(bvp_signal, sampling_rate=self.WRIST_FS['BVP'], show=False)
+            else:
+                hrv_df = None
+
+            if hrv_df is not None:
+                # 选择关键特征
+                hrv_features = hrv_df[['HRV_RMSSD', 'HRV_SDNN', 'HRV_pNN50',
+                                       'HRV_VLF', 'HRV_LF', 'HRV_HF', 'HRV_LFHF',
+                                       'HRV_SampEn', 'HRV_MeanNN', 'HRV_MedianNN']].iloc[0].values
+            else:
+                hrv_features = nan_placeholder
+        except Exception as e:
+            # NeuroKit2 在信号质量差时可能报错，我们需要捕获它
+            # print(f"警告: HRV/PRV 分析失败 - {e}")
+            hrv_features = nan_placeholder
+
+        all_features.extend(hrv_features)
+
+        # --- 2. EDA 特征 ---
+        # 我们将融合胸部和腕部的EDA特征
+        for key in ['chest_EDA', 'wrist_EDA']:
+            eda_signal = window_data_dict.get(key)
+            eda_features = np.full(4, np.nan)  # SCR_Peaks_N, SCR_Peaks_Amplitude_Mean, EDA_Phasic_Mean, EDA_Tonic_Mean
+            if eda_signal is not None:
+                try:
+                    fs = self.CHEST_FS if 'chest' in key else self.WRIST_FS['EDA']
+                    eda_df, _ = nk.eda_process(eda_signal, sampling_rate=fs)
+                    peaks_df = nk.eda_peaks(eda_df["EDA_Phasic"], sampling_rate=fs, method="neurokit")
+                    eda_features = [
+                        peaks_df[1]['SCR_Peaks_N'],
+                        np.nan_to_num(np.mean(peaks_df[0]['SCR_Amplitude'])),
+                        np.nan_to_num(np.mean(eda_df['EDA_Phasic'])),
+                        np.nan_to_num(np.mean(eda_df['EDA_Tonic']))
+                    ]
+                except Exception as e:
+                    # print(f"警告: {key} 分析失败 - {e}")
+                    pass  # 使用 NaN 占位符
+            all_features.extend(eda_features)
+
+        # --- 3. 呼吸 (RESP) 特征 ---
+        resp_signal = window_data_dict.get('chest_Resp')
+        resp_features = np.full(3, np.nan)  # RSP_Rate_Mean, RRV_RMSSD, RRV_SDNN
+        if resp_signal is not None:
+            try:
+                rsp_df, _ = nk.rsp_process(resp_signal, sampling_rate=self.CHEST_FS)
+                rsp_rate = nk.rsp_rate(rsp_df, sampling_rate=self.CHEST_FS)
+                rrv_df = nk.hrv_time_domain(rsp_df, sampling_rate=self.CHEST_FS)
+                resp_features = [np.nan_to_num(np.mean(rsp_rate['RSP_Rate'])), rrv_df['RRV_RMSSD'].iloc[0],
+                                 rrv_df['RRV_SDNN'].iloc[0]]
+            except Exception as e:
+                # print(f"警告: RESP 分析失败 - {e}")
+                pass
+        all_features.extend(resp_features)
+
+        # --- 4. ACC 特征 ---
+        # 简单地使用信号能量作为身体活动指标
+        for key in ['chest_ACC', 'wrist_ACC']:
+            acc_signal = window_data_dict.get(key)
+            acc_energy = np.nan
+            if acc_signal is not None:
+                acc_energy = np.mean(np.sqrt(np.sum(acc_signal ** 2, axis=1)))
+            all_features.append(acc_energy)
+
+        # --- 5. EMG 特征 ---
+        emg_signal = window_data_dict.get('chest_EMG')
+        emg_energy = np.nan
+        if emg_signal is not None:
+            emg_energy = np.mean(np.abs(emg_signal))
+        all_features.append(emg_energy)
+
+        return all_features
 
     def process_subject(self, subject_id):
         """处理单个受试者的数据。"""
@@ -148,29 +234,33 @@ class WesadPreprocessor:
         # 1. 为中/晚期融合 (feature_fusion) 提取特征
         chest_windows, labels = self._get_windows(len(data[b'label']), protocol_df, self.CHEST_FS)
 
+        if not chest_windows:  # 增加一个检查，如果没有任何窗口生成
+            return None, None, None, None
+
         feature_windows = []
         for start, end in chest_windows:
-            window_features = []
-            # 胸部特征
+            window_data = {}
+            # 收集这个窗口内所有模态的原始信号段
             for channel in self.CHEST_CHANNELS:
-                signal_data = data[b'signal'][b'chest'][channel.encode()][start:end]
-                window_features.extend(self._extract_features(signal_data))
-
-            # 腕部特征 (需要根据各自采样率计算窗口索引)
+                window_data[f'chest_{channel}'] = data[b'signal'][b'chest'][channel.encode()][start:end]
             for channel in self.WRIST_CHANNELS:
                 fs = self.WRIST_FS[channel]
                 w_start = int(start * fs / self.CHEST_FS)
                 w_end = int(end * fs / self.CHEST_FS)
-                signal_data = data[b'signal'][b'wrist'][channel.encode()][w_start:w_end]
-                window_features.extend(self._extract_features(signal_data))
+                window_data[f'wrist_{channel}'] = data[b'signal'][b'wrist'][channel.encode()][w_start:w_end]
 
+            # 调用新的特征提取函数
+            window_features = self._extract_features_nk(window_data)
             feature_windows.append(window_features)
 
-        X_feat = np.array(feature_windows)
+        # 清理可能产生的NaN/Inf值
+        X_feat = pd.DataFrame(feature_windows).fillna(0).replace([np.inf, -np.inf], 0).values
         y_feat = labels
-        print(f"为 [feature_fusion] 生成了 {X_feat.shape[0]} 个窗口，每个窗口有 {X_feat.shape[1]} 个特征。")
 
-        # 2. 为早期融合 (early_fusion) 准备重采样后的信号
+        if X_feat.shape[0] > 0:
+            print(f"为 [feature_fusion] 生成了 {X_feat.shape[0]} 个窗口，每个窗口有 {X_feat.shape[1]} 个高级特征。")
+
+        # 2. 为早期融合 (wesad_early_fusion) 准备重采样后的信号
         resampled_signals = {}
         all_channels = self.CHEST_CHANNELS + self.WRIST_CHANNELS
 
@@ -220,76 +310,27 @@ class WesadPreprocessor:
         for i, (start, end) in enumerate(target_windows):
             X_early[i, :, :] = concatenated_signals[start:end, :]
 
-        print(f"为 [early_fusion] 生成了 {X_early.shape[0]} 个窗口，形状为 {X_early.shape[1:]}。")
+        print(f"为 [wesad_early_fusion] 生成了 {X_early.shape[0]} 个窗口，形状为 {X_early.shape[1:]}。")
 
         return X_feat, y_feat, X_early, y_early
 
     def run(self):
-        """处理所有受试者并为每次LOSOCV折叠保存独立的Scaler。"""
         subject_ids = [f"S{i}" for i in range(2, 18) if i != 12]
+        print("--- 开始生成所有受试者的窗口化 .npy 数据文件 ---")
 
-        # -----------------------------------------------------------------
-        # 第一步: 像之前一样，先处理并保存每个受试者的窗口化数据
-        # -----------------------------------------------------------------
         for sid in subject_ids:
+            # 提取特征和信号
             X_f, y_f, X_e, y_e = self.process_subject(sid)
-            if X_f is not None:
-                # 保存每个受试者的预处理数据
-                np.save(self.feature_fusion_path / f'{sid}_X.npy', X_f)
-                np.save(self.feature_fusion_path / f'{sid}_y.npy', y_f)
-                np.save(self.early_fusion_path / f'{sid}_X.npy', X_e)
-                np.save(self.early_fusion_path / f'{sid}_y.npy', y_e)
 
-        print("\n所有受试者的独立数据文件已保存。")
-        print("--- 现在开始为每一次留一法交叉验证生成并保存Scaler ---")
+            if X_f is not None and y_f is not None:
+                np.save(self.output_root / 'wesad_feature_fusion' / f'{sid}_X.npy', X_f)
+                np.save(self.output_root / 'wesad_feature_fusion' / f'{sid}_y.npy', y_f)
 
-        # -----------------------------------------------------------------
-        # 第二步: 循环N次，每次留出一个受试者，用其余的来fit并保存scaler
-        # -----------------------------------------------------------------
-        for test_subject in subject_ids:
-            train_subjects = [s for s in subject_ids if s != test_subject]
+            if X_e is not None and y_e is not None:
+                np.save(self.output_root / 'wesad_early_fusion' / f'{sid}_X.npy', X_e)
+                np.save(self.output_root / 'wesad_early_fusion' / f'{sid}_y.npy', y_e)
 
-            # --- 为 Feature Fusion 数据生成 Scaler ---
-            try:
-                # 加载当前折叠所需的所有训练数据
-                X_train_list = [np.load(self.feature_fusion_path / f'{sid}_X.npy') for sid in train_subjects]
-                X_train_fold = np.concatenate(X_train_list, axis=0)
-
-                # 创建、拟合 Scaler
-                scaler_feat = StandardScaler()
-                scaler_feat.fit(X_train_fold)
-
-                # 以测试受试者的名字来命名并保存
-                scaler_path = self.feature_fusion_path / f'scaler_for_{test_subject}.pkl'
-                with open(scaler_path, 'wb') as f:
-                    pickle.dump(scaler_feat, f)
-                print(f"已生成并保存: {scaler_path.name} (基于 {len(train_subjects)} 个训练受试者)")
-
-            except Exception as e:
-                print(f"为 {test_subject} 生成 feature fusion scaler 时出错: {e}")
-
-            # 对于早期融合数据，归一化通常在DataLoader中按通道进行，
-            # 所以我们计算并保存均值和标准差向量，而不是一个Scaler对象。
-            try:
-                X_train_list_early = [np.load(self.early_fusion_path / f'{sid}_X.npy') for sid in train_subjects]
-                X_train_fold_early = np.concatenate(X_train_list_early, axis=0)
-
-                # (N, L, C) -> (N*L, C)
-                data_reshaped = X_train_fold_early.reshape(-1, X_train_fold_early.shape[2])
-
-                mean_vec = np.mean(data_reshaped, axis=0)
-                std_vec = np.std(data_reshaped, axis=0)
-
-                # 保存均值和标准差向量
-                norm_params_path = self.early_fusion_path / f'norm_params_for_{test_subject}.npz'
-                np.savez(norm_params_path, mean=mean_vec, std=std_vec)
-                print(f"已生成并保存: {norm_params_path.name} (基于 {len(train_subjects)} 个训练受试者)")
-
-            except Exception as e:
-                print(f"为 {test_subject} 生成 early fusion norm params 时出错: {e}")
-
-        print("\n预处理完成！所有数据和交叉验证所需的Scaler均已生成。")
-
+        print("\n预处理完成！所有数据已保存为未归一化的 .npy 文件。")
 
 # --- 3. 主程序入口 ---
 if __name__ == '__main__':

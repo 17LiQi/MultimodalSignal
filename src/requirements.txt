@@ -8,13 +8,15 @@ scipy # 1.15.3
 seaborn # 0.13.2
 tqdm # 4.67.1
 scikit-learn # 1.7.1
+xgboost == 1.7.6
 
 # 核心库
 # PyTorch with CUDA 12.1 support
 torch==2.4.0
+pytorch_tabnet # 4.1.0
 
 # 专业库
-# neurokit2 # 0.2.12
+neurokit2 # 0.2.12
 
 # 配置库
 PyYAML # 6.0.2

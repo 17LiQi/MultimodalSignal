@@ -1,4 +1,4 @@
-# configs/exp_3channel_resnet.yaml
+# configs/early_3channel_resnet.yaml
 
 defaults:
   - base_config
@@ -20,10 +20,10 @@ model:
 # --- 训练器配置 ---
 trainer:
   # 对于更深的模型，可能需要更多的 epochs 或不同的学习率
-  epochs: 70
+  epochs: 50
   learning_rate: 0.0005
   early_stopping:
-    patience: 10 # 深层模型可能需要更多的耐心
+    patience: 15 # 深层模型可能需要更多的耐心
 
 # --- 融合方式 ---
 fusion:

@@ -5,149 +5,240 @@ import pandas as pd
 from collections import Counter
 from src.utils.path_manager import get_path_manager
 
-# --- 设置路径 ---
-path = get_path_manager()
-PROCESSED_DATA_PATH = path.DATA_ROOT
-SUBJECT_TO_CHECK = 'S2'
 
-print(f"--- 正在验证受试者 {SUBJECT_TO_CHECK} 的预处理文件 ---\n")
+class WESADPreprocessChecker:
+    """WESAD数据集预处理验证器"""
 
-# --- 1. 检查 Feature Fusion (中/晚期融合) 数据 ---
-print("--- 1. 检查 Feature Fusion 数据 ---")
-try:
-    # 加载特征和标签
-    x_feat = np.load(PROCESSED_DATA_PATH / 'feature_fusion' / f'{SUBJECT_TO_CHECK}_X.npy')
-    y_feat = np.load(PROCESSED_DATA_PATH / 'feature_fusion' / f'{SUBJECT_TO_CHECK}_y.npy')
+    def __init__(self, wesad_root: Path, processed_data_root: Path, subject_id: str = 'S2'):
+        self.wesad_root = Path(wesad_root)
+        self.processed_data_root = Path(processed_data_root)
+        self.subject_id = subject_id
+        self.fs = 700  # 采样频率
+        self.class_labels = {1: 'Base', 2: 'TSST', 3: 'Fun', 4: 'Medi'}  # 任务到标签的映射
 
-    print(f"特征数据 (X_feat) 的形状: {x_feat.shape}")
-    print(f"标签数据 (y_feat) 的形状: {y_feat.shape}")
+    def _log(self, message: str, level: str = 'INFO'):
+        """记录日志信息"""
+        prefix = {'INFO': '\033[92m', 'ERROR': '\033[91m', 'WARNING': '\033[93m'}.get(level, '')
+        suffix = '\033[0m'
+        print(f"{prefix}[{level}] {message}{suffix}")
 
-    # 验证形状是否符合预期
-    assert x_feat.shape[0] == y_feat.shape[0], "X和y的窗口数量不匹配!"
-    assert x_feat.shape[1] == 48, "特征数量不等于48!"
+    def check_feature_fusion(self):
+        """检查特征融合数据"""
+        self._log(f"Checking Feature Fusion data for subject {self.subject_id}", 'INFO')
+        try:
+            x_path = self.processed_data_root / 'wesad_feature_fusion' / f'{self.subject_id}_X.npy'
+            y_path = self.processed_data_root / 'wesad_feature_fusion' / f'{self.subject_id}_y.npy'
 
-    # 检查标签分布
-    unique_labels, counts = np.unique(y_feat, return_counts=True)
-    print(f"标签类别及其数量: {dict(zip(unique_labels, counts))}")
-    print("-> 结果符合预期：特征维度为48，标签为0, 1, 2三类。\n")
+            x_feat = np.load(x_path)
+            y_feat = np.load(y_path)
 
-except FileNotFoundError:
-    print("错误: 未找到 feature_fusion 的 .npy 文件。请先运行 preprocess.py。\n")
+            self._log(f"X_feat shape: {x_feat.shape}")
+            self._log(f"y_feat shape: {y_feat.shape}")
 
-# --- 2. 检查 Early Fusion (早期融合) 数据 ---
-print("--- 2. 检查 Early Fusion 数据 ---")
-try:
-    # 加载信号和标签
-    x_early = np.load(PROCESSED_DATA_PATH / 'early_fusion' / f'{SUBJECT_TO_CHECK}_X.npy')
-    y_early = np.load(PROCESSED_DATA_PATH / 'early_fusion' / f'{SUBJECT_TO_CHECK}_y.npy')
+            # 验证形状
+            assert x_feat.shape[0] == y_feat.shape[0], "X and y window counts do not match!"
+            assert x_feat.shape[1] == 24, "Feature dimension is not 24!"
 
-    print(f"信号数据 (X_early) 的形状: {x_early.shape}")
-    print(f"标签数据 (y_early) 的形状: {y_early.shape}")
+            # 检查标签分布
+            unique_labels, counts = np.unique(y_feat, return_counts=True)
+            self._log(f"Label distribution: {dict(zip(unique_labels, counts))}")
+            self._log("Feature Fusion check passed: feature dimension is 48, labels are [0, 1, 2].")
 
-    # 验证形状是否符合预期
-    assert x_early.shape[0] == y_early.shape[0], "X和y的窗口数量不匹配!"
-    assert x_early.shape[1] == 1920, "窗口长度不等于1920 (30s * 64Hz)!"
-    assert x_early.shape[2] == 12, "通道数量不等于12!"
+        except FileNotFoundError:
+            self._log(f"Feature Fusion .npy files not found for {self.subject_id}. Run preprocess.py.", 'ERROR')
+        except AssertionError as e:
+            self._log(f"Feature Fusion check failed: {str(e)}", 'ERROR')
 
-    print("-> 结果符合预期：数据形状为 (窗口数, 1920, 12)。\n")
+    def check_early_fusion(self):
+        """检查早期融合数据"""
+        self._log(f"Checking Early Fusion data for subject {self.subject_id}", 'INFO')
+        try:
+            x_path = self.processed_data_root / 'wesad_early_fusion' / f'{self.subject_id}_X.npy'
+            y_path = self.processed_data_root / 'wesad_early_fusion' / f'{self.subject_id}_y.npy'
 
-except FileNotFoundError:
-    print("错误: 未找到 early_fusion 的 .npy 文件。请先运行 preprocess.py。\n")
+            x_early = np.load(x_path)
+            y_early = np.load(y_path)
 
+            self._log(f"X_early shape: {x_early.shape}")
+            self._log(f"y_early shape: {y_early.shape}")
 
-def parse_quest_csv(subject_id: str, wesad_root: Path) -> pd.DataFrame:
-    quest_path = wesad_root / subject_id / f"{subject_id}_quest.csv"
-    df_raw = pd.read_csv(quest_path, sep=';', header=None, skip_blank_lines=True)
-    order_row = df_raw[df_raw[0].str.contains('# ORDER', na=False)].values[0]
-    start_row = df_raw[df_raw[0].str.contains('# START', na=False)].values[0]
-    end_row = df_raw[df_raw[0].str.contains('# END', na=False)].values[0]
-    tasks = [str(t).strip() for t in pd.Series(order_row[1:]).dropna().tolist()]
-    start_times = pd.Series(start_row[1:]).dropna().astype(float).tolist()
-    end_times = pd.Series(end_row[1:]).dropna().astype(float).tolist()
-    protocol_df = pd.DataFrame({'task': tasks, 'start_min': start_times, 'end_min': end_times})
-    return protocol_df
+            # 验证形状
+            assert x_early.shape[0] == y_early.shape[0], "X and y window counts do not match!"
+            assert x_early.shape[1] == 1920, "Window length is not 1920 (30s * 64Hz)!"
+            assert x_early.shape[2] == 12, "Channel count is not 12!"
 
+            self._log("Early Fusion check passed: shape is (windows, 1920, 12).")
 
-def load_pkl(subject_id: str, wesad_root: Path):
-    pkl_path = wesad_root / subject_id / f"{subject_id}.pkl"
-    with open(pkl_path, 'rb') as f: return pickle.load(f, encoding='bytes')
+        except FileNotFoundError:
+            self._log(f"Early Fusion .npy files not found for {self.subject_id}. Run preprocess.py.", 'ERROR')
+        except AssertionError as e:
+            self._log(f"Early Fusion check failed: {str(e)}", 'ERROR')
 
+    def parse_quest_csv(self) -> pd.DataFrame:
+        """解析quest.csv文件，提取任务时间戳"""
+        quest_path = self.wesad_root / self.subject_id / f"{self.subject_id}_quest.csv"
+        try:
+            df_raw = pd.read_csv(quest_path, sep=';', header=None, skip_blank_lines=True)
+            order_row = df_raw[df_raw[0].str.contains('# ORDER', na=False)].values[0]
+            start_row = df_raw[df_raw[0].str.contains('# START', na=False)].values[0]
+            end_row = df_raw[df_raw[0].str.contains('# END', na=False)].values[0]
 
-# --- 新的验证函数 ---
+            tasks = [str(t).strip() for t in pd.Series(order_row[1:]).dropna().tolist()]
+            start_times = pd.Series(start_row[1:]).dropna().astype(float).tolist()
+            end_times = pd.Series(end_row[1:]).dropna().astype(float).tolist()
 
-def verify_label_alignment(subject_id: str, wesad_root: Path):
-    """
-    验证从 .csv 解析的时间戳与 .pkl 文件中自带的标签序列是否对齐。
-    """
-    print(f"--- 正在对受试者 {subject_id} 进行标签对齐验证 ---")
+            return pd.DataFrame({'task': tasks, 'start_min': start_times, 'end_min': end_times})
+        except Exception as e:
+            self._log(f"Failed to parse quest.csv for {self.subject_id}: {str(e)}", 'ERROR')
+            return pd.DataFrame()
 
-    try:
-        # 1. 加载原始数据
-        protocol_df = parse_quest_csv(subject_id, wesad_root)
-        data = load_pkl(subject_id, wesad_root)
-        pkl_labels = data[b'label']
-        fs = 700
+    def load_pkl(self):
+        """加载.pkl文件"""
+        pkl_path = self.wesad_root / self.subject_id / f"{self.subject_id}.pkl"
+        try:
+            with open(pkl_path, 'rb') as f:
+                return pickle.load(f, encoding='bytes')
+        except Exception as e:
+            self._log(f"Failed to load .pkl file for {self.subject_id}: {str(e)}", 'ERROR')
+            return None
 
-        # *** 关键修复点 1: 建立从任务名到预期 pkl 标签的映射 ***
-        # 我们将 .csv 中的任务名（去除空格）映射到 .pkl 中的标签值
-        task_name_to_expected_label = {
-            'Base': 1,
-            'TSST': 2,
-            'Fun': 3,
-            'Medi1': 4,  # Medi 1 对应标签 4
-            'Medi2': 4  # Medi 2 也对应标签 4
-        }
+    def verify_label_alignment(self):
+        """验证标签对齐"""
+        self._log(f"Verifying label alignment for subject {self.subject_id}", 'INFO')
 
+        task_name_to_label = {'Base': 1, 'TSST': 2, 'Fun': 3, 'Medi1': 4, 'Medi2': 4}
         all_tasks_verified = True
 
-        # 2. 遍历协议中的每个任务
-        for _, row in protocol_df.iterrows():
-            task_name_from_csv = row['task'].replace(" ", "").strip()
+        try:
+            # 加载数据
+            protocol_df = self.parse_quest_csv()
+            if protocol_df.empty:
+                self._log("Label alignment check aborted due to parse_quest_csv failure.", 'ERROR')
+                return
 
-            # 从映射中获取该任务的预期标签值
-            expected_label = task_name_to_expected_label.get(task_name_from_csv)
+            data = self.load_pkl()
+            if data is None:
+                self._log("Label alignment check aborted due to load_pkl failure.", 'ERROR')
+                return
 
-            # 如果这个任务不在我们的核心验证列表里 (如 sRead)，就跳过
-            if expected_label is None:
+            pkl_labels = data[b'label']
+
+            # 验证每个任务
+            for _, row in protocol_df.iterrows():
+                task_name = row['task'].replace(" ", "").strip()
+                expected_label = task_name_to_label.get(task_name)
+
+                if expected_label is None:
+                    self._log(f"Skipping task {row['task']} (not in core tasks).", 'INFO')
+                    continue
+
+                self._log(f"Verifying task: {row['task']}")
+
+                # 计算时间戳
+                start_idx = int(row['start_min'] * 60 * self.fs)
+                end_idx = int(row['end_min'] * 60 * self.fs)
+                segment = pkl_labels[start_idx:end_idx]
+
+                # 找到主要标签（忽略过渡标签0）
+                counts = Counter(segment)
+                top_two = counts.most_common(2)
+                main_label = top_two[0][0] if top_two[0][0] != 0 else (top_two[1][0] if len(top_two) > 1 else 0)
+
+                self._log(f"  CSV timestamp ({row['start_min']}-{row['end_min']} min), "
+                          f"segment length: {len(segment)}, main label: {main_label}")
+
+                # 比较标签
+                if main_label != expected_label:
+                    self._log(f"  Verification failed: main label ({main_label}) does not match "
+                              f"expected label ({expected_label})!", 'ERROR')
+                    all_tasks_verified = False
+                else:
+                    self._log(f"  Verification passed: main label matches expected.", 'INFO')
+
+            self._log("\nLabel Alignment Summary", 'INFO')
+            self._log("All core tasks verified successfully!" if all_tasks_verified else
+                      "Label alignment issues detected!", 'INFO' if all_tasks_verified else 'ERROR')
+
+        except Exception as e:
+            self._log(f"Label alignment check failed: {str(e)}", 'ERROR')
+
+    def verify_new_features(self, fusion_type: str = 'wesad_feature_fusion', subject_ids: list = None):
+        """验证新生成的特征数据"""
+        if subject_ids is None:
+            subject_ids = [f"S{i}" for i in range(2, 18) if i != 12]
+
+        self._log(f"Verifying new '{fusion_type}' dataset", 'INFO')
+        data_folder = self.processed_data_root / fusion_type
+
+        if not data_folder.exists():
+            self._log(f"Directory not found: {data_folder}", 'ERROR')
+            return
+
+        all_feature_dims = []
+        total_windows = 0
+        is_first_subject = True
+
+        for sid in subject_ids:
+            x_path = data_folder / f'{sid}_X.npy'
+            y_path = data_folder / f'{sid}_y.npy'
+
+            if is_first_subject:
+                self._log(f"Checking subject {sid} (as sample)", 'INFO')
+                is_first_subject = False
+
+            if not x_path.exists() or not y_path.exists():
+                self._log(f"Missing X or y file for subject {sid}", 'ERROR')
                 continue
 
-            print(f"\n验证任务: {row['task']}")
+            try:
+                x_data = np.load(x_path)
+                y_data = np.load(y_path)
 
-            # 3. 提取序列A (基于CSV时间戳)
-            start_idx_csv = int(row['start_min'] * 60 * fs)
-            end_idx_csv = int(row['end_min'] * 60 * fs)
-            segment_from_csv = pkl_labels[start_idx_csv:end_idx_csv]
+                # 验证数据
+                if x_data.shape[0] != y_data.shape[0]:
+                    self._log(f"Subject {sid}: X ({x_data.shape[0]}) and y ({y_data.shape[0]}) "
+                              f"window counts do not match!", 'ERROR')
+                if np.isnan(x_data).any() or not np.all(np.isfinite(x_data)):
+                    self._log(f"Subject {sid}: X contains NaN or Inf values!", 'WARNING')
 
-            # 找到这个数据段中的主要标签 (忽略过渡标签0)
-            counts_csv = Counter(segment_from_csv)
-            top_two = counts_csv.most_common(2)
-            main_label_csv = top_two[0][0] if top_two[0][0] != 0 else (top_two[1][0] if len(top_two) > 1 else 0)
+                all_feature_dims.append(x_data.shape[1])
+                total_windows += x_data.shape[0]
 
-            print(f"  - 根据 CSV 时间戳 ({row['start_min']}-{row['end_min']} min), "
-                  f"提取的片段长度为 {len(segment_from_csv)}, "
-                  f"片段中的主要标签为: {main_label_csv}")
+            except Exception as e:
+                self._log(f"Failed to process subject {sid}: {str(e)}", 'ERROR')
 
-            # *** 关键修复点 2: 修正比较逻辑 ***
-            # 比较 "实际从pkl切片中找到的主要标签" 与 "根据csv任务名预期的标签"
-            if main_label_csv != expected_label:
-                print(
-                    f"  - \033[91m验证失败\033[0m: 片段内的主要标签 ({main_label_csv}) 与预期的任务标签 ({expected_label}) 不符!")
-                all_tasks_verified = False
-            else:
-                print(f"  - \033[92m验证通过\033[0m: 片段内的主要标签与预期一致。")
+        self._log("\nNew Features Verification Summary", 'INFO')
+        if not all_feature_dims:
+            self._log("No data loaded for verification.", 'ERROR')
+            return
 
-        print("\n--- 验证总结 ---")
-        if all_tasks_verified:
-            print("\033[92m所有核心任务的标签对齐验证成功！\033[0m")
+        if len(set(all_feature_dims)) == 1:
+            in_features = all_feature_dims[0]
+            self._log(f"Verification successful!", 'INFO')
+            self._log(f"All subjects have consistent feature dimension: {in_features}")
+            self._log(f"Processed {len(subject_ids)} subjects, {total_windows} windows.")
+            self._log(f"\nUpdate your config (e.g., exp_feature_tabnet.yaml) with:")
+            self._log(f"  model -> params -> in_features: \033[1m{in_features}\033[0m")
         else:
-            print("\033[91m存在标签对齐问题。\033[0m")
+            self._log(f"Verification failed: inconsistent feature dimensions {set(all_feature_dims)}", 'ERROR')
 
-    except Exception as e:
-        print(f"\n验证过程中出现错误: {e}")
+    def run_all_checks(self):
+        """运行所有验证"""
+        self._log(f"Starting preprocessing checks for subject {self.subject_id}", 'INFO')
+        self._log("=" * 50, 'INFO')
+        self.check_feature_fusion()
+        self.check_early_fusion()
+        self.verify_label_alignment()
+        self.verify_new_features()
+        self._log("=" * 50, 'INFO')
+        self._log("All preprocessing checks completed.", 'INFO')
 
 
-try:
-    # 运行对S2的验证
-    verify_label_alignment(subject_id='S2', wesad_root=Path(path.WESAD_ROOT))
-except Exception as e:
-    print(f"执行失败，请确保 WESAD_ROOT_PATH 路径正确。错误: {e}")
+if __name__ == "__main__":
+    path_manager = get_path_manager()
+    checker = WESADPreprocessChecker(
+        wesad_root=path_manager.WESAD_ROOT,
+        processed_data_root=path_manager.DATA_ROOT,
+        subject_id='S2'
+    )
+    checker.run_all_checks()

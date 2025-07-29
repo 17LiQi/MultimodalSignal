@@ -1,0 +1,46 @@
+# configs/hybrid.yaml
+
+defaults:
+  - base_config
+
+dataset:
+  # 这个融合策略同时需要两种数据
+  # 我们用 'name' 来指定主数据类型，然后在代码中硬编码另一个
+  name: "wesad_hybrid" # 定义一个新的名字
+  channels_to_use: ['chest_ACC_x', 'chest_ACC_y', 'chest_ACC_z', 'chest_ECG', 'chest_EDA', 'chest_EMG', 'chest_Resp'] # 用于原始信号流
+  sequence_params:
+    sequence_length: 10
+    step: 1
+
+model:
+  name: "hybrid" # <--- 使用新的混合模型
+  params:
+    fusion_dim: 128
+
+    # --- 流A (原始信号流) 的模型参数 ---
+    raw_model:
+      name: "cnn_gru"
+      params:
+        cnn_out_channels: 32
+        gru_hidden_size: 64
+        gru_num_layers: 2
+        dropout: 0.5
+
+    # --- 流B (高级特征流) 的模型参数 ---
+    feature_model:
+      name: "feature_gru"
+      params:
+        in_features: 24
+        hidden_size: 64
+        num_layers: 2
+        dropout: 0.5
+
+trainer:
+  epochs: 100
+  learning_rate: 0.001
+  batch_size: 128
+  early_stopping:
+    patience: 15
+
+fusion:
+  type: "hybrid" # <--- 主流上属于中期融合,但为了区分这里定义一个新的融合类型

@@ -2,6 +2,8 @@ import torch
 import time
 import pickle
 import numpy as np
+from sklearn.utils import compute_class_weight
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
 from pathlib import Path
 from datetime import datetime
@@ -17,7 +19,7 @@ tqdm.set_lock(Lock())
 
 
 class Trainer:
-    def __init__(self, model, config, fold_output_dir: Path):
+    def __init__(self, model, config, fold_output_dir: Path, train_dataset=None):
         self.model = model
         self.config = config
         self.fold_dir = fold_output_dir
@@ -45,13 +47,42 @@ class Trainer:
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
         self.criterion = torch.nn.CrossEntropyLoss().to(self.device)  # 移动损失函数到 GPU
 
+        # --- 新增: 创建学习率调度器 ---
+        # 当 'val_loss' 在 'patience' 个 epoch 内没有改善时，
+        # 将学习率乘以 'factor'。
+        self.scheduler = ReduceLROnPlateau(
+            self.optimizer,
+            mode='min',  # 监控 val_loss
+            factor=0.1,  # 学习率衰减为原来的 10%
+            patience=3,  # 这里的 patience 可以比 early stopping 的短
+        )
+
+        # --- 动态设置损失函数 ---
+        class_weights = None
+        # 检查配置中是否有类别加权的设置
+        if config.trainer.get('use_class_weights', False) and train_dataset is not None:
+            self._log("计算类别权重...")
+            try:
+                class_weights = compute_class_weight(
+                    'balanced',
+                    classes=np.unique(train_dataset.labels),
+                    y=train_dataset.labels
+                )
+                class_weights = torch.tensor(class_weights, dtype=torch.float).to(self.device)
+                self._log(f"已启用类别加权损失，权重为: {class_weights.cpu().numpy()}")
+            except Exception as e:
+                self._log(f"警告: 类别权重计算失败 - {e}。将使用标准损失函数。")
+                class_weights = None
+
+        self.criterion = torch.nn.CrossEntropyLoss(weight=class_weights).to(self.device)
+
         self.early_stopping = None
         # --- 保存最佳模型到折叠目录 ---
         if config.trainer.early_stopping.enabled:
             self.early_stopping = EarlyStopping(
                 patience=config.trainer.early_stopping.patience,
                 delta=config.trainer.early_stopping.delta,
-                checkpoint_path=self.fold_dir / 'best_model.pt',  # <-- 2. 路径更新
+                checkpoint_path=self.fold_dir / 'best_model.pt',
                 verbose=True,
                 log_func=self._log
             )
@@ -78,7 +109,14 @@ class Trainer:
             progress_bar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{self.epochs} [Training]")
 
             for inputs, labels in progress_bar:
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                if isinstance(inputs, (list, tuple)):
+                    # 如果是列表或元组，遍历其中的每个张量并移动
+                    inputs = [i.to(self.device) for i in inputs]
+                else:
+                    # 否则，直接移动
+                    inputs = inputs.to(self.device)
+
+                labels = labels.to(self.device)
 
                 self.optimizer.zero_grad()
                 outputs = self.model(inputs)
@@ -86,14 +124,20 @@ class Trainer:
                 loss.backward()
                 self.optimizer.step()
 
-                train_loss += loss.item()
+                # 获取批次大小 (可以从 labels 或 inputs 列表的第一个元素获取)
+                batch_size = labels.size(0)
+                train_loss += loss.item() * batch_size  # 乘以批次大小
+
+                progress_bar.set_postfix(loss=loss.item())
 
             epoch_end_time = time.time()
             epoch_duration = epoch_end_time - epoch_start_time
 
             # --- 简化验证 ---
-            # 3. 调用 evaluate，它将不再显示自己的进度条
+            # 2. 调用 evaluate，它将不再显示自己的进度条
             val_loss, val_acc, val_f1, val_preds, val_labels = self.evaluate(val_loader, is_val=True)
+            # 3. 使用 ReduceLROnPlateau 调整学习率
+            self.scheduler.step(val_loss)
             # 只有当验证集表现提升时，才更新并保存验证集的混淆矩阵
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
@@ -136,11 +180,19 @@ class Trainer:
         # 直接在无梯度的模式下迭代数据加载器
         with torch.no_grad():
             for inputs, labels in data_loader:  # 直接迭代，不使用 tqdm
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                if isinstance(inputs, (list, tuple)):
+                    inputs = [i.to(self.device) for i in inputs]
+                else:
+                    inputs = inputs.to(self.device)
+
+                labels = labels.to(self.device)
 
                 outputs = self.model(inputs)
                 loss = self.criterion(outputs, labels)
-                total_loss += loss.item() * inputs.size(0)
+
+                # 获取批次大小
+                batch_size = labels.size(0)
+                total_loss += loss.item() * batch_size  # 乘以批次大小
 
                 _, preds = torch.max(outputs, 1)
                 all_preds.extend(preds.cpu().numpy())

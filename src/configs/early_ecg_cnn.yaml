@@ -1,4 +1,4 @@
-# src/configs/ecg_cnn.yaml
+# src/configs/early_ecg_cnn.yaml
 
 # 继承基础配置
 defaults:

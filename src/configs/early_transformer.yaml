@@ -1,0 +1,29 @@
+# configs/early_transformer.yaml
+defaults:
+  - base_config
+
+dataset:
+  name: "wesad_early_fusion"
+  # 我们先从7个胸部通道开始，因为这是之前表现最好的设置
+  channels_to_use: ['chest_ACC_x', 'chest_ACC_y', 'chest_ACC_z', 'chest_ECG', 'chest_EDA', 'chest_EMG', 'chest_Resp']
+
+model:
+  name: "transformer" # <--- 指定新模型
+  params:
+#    in_channels: 7
+#    num_classes: 3
+    # Transformer 超参数
+    d_model: 128   # 嵌入维度 (必须能被 nhead 整除)
+    nhead: 8       # 多头注意力的头数
+    num_layers: 4  # Transformer Encoder 的层数
+    dropout: 0.3
+
+trainer:
+  epochs: 100
+  learning_rate: 0.0001 # Transformer 通常需要更小的学习率和warm-up，我们先从一个较小的值开始
+  batch_size: 32        # Transformer 对内存消耗较大，减小 batch size
+  early_stopping:
+    patience: 15
+
+fusion:
+  type: "early"

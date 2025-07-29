@@ -12,7 +12,7 @@ seed: 42
 # --- 数据集配置 ---
 dataset:
   # 数据集名称，会被用作 data/processed/ 目录下的子文件夹名
-  name: "early_fusion"
+  name: "wesad_early_fusion"
   # WESAD 数据集的所有可用受试者
   all_subjects: ['S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9', 'S10', 'S11', 'S13', 'S14', 'S15', 'S16', 'S17']
   # 从训练集中划分出作为验证集的比例
@@ -23,9 +23,10 @@ dataset:
 
 # --- 模型配置 ---
 model:
-  params:
-    # 压力、娱乐、中性
-    num_classes: 3
+  # 压力、娱乐、中性
+  num_classes: 3
+
+  params: {}
 
 # --- 训练器配置 ---
 trainer:
@@ -37,7 +38,8 @@ trainer:
   batch_size: 64
   # 数据加载器的工作线程数
   num_workers: 0  # 增加了线程会导致tqdm进度条显示异常,而且线程数越多，速度反而越慢
-
+  # --- 类别加权开关 ---
+  use_class_weights: false
   # --- 早停 (Early Stopping) 配置 ---
   early_stopping:
     # 是否启用早停

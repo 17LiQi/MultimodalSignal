@@ -1,0 +1,20 @@
+# configs/feature_xgboost.yaml
+
+defaults:
+  - base_config
+
+# --- 数据集配置 ---
+dataset:
+  name: "wesad_feature_fusion"
+  channels_to_use: null
+# --- 模型配置 ---
+model:
+  name: "xgboost" # <--- 指定使用 XGBoost
+  params:
+    in_features: 24 # 确保这个值与 NeuroKit2 特征数一致
+    num_classes: 3
+    early_stopping_rounds: 10
+
+# --- 融合方式配置 ---
+fusion:
+  type: "feature"

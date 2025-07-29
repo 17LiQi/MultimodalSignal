@@ -5,6 +5,7 @@ import torch
 
 MAIN_DEPENDENCIES = [
     "torch",  # PyTorch框架
+    "pytorch_tabnet",  # TabNet模型库
 
     "numpy",  # 数值计算库
     "pandas",  # 数据处理库

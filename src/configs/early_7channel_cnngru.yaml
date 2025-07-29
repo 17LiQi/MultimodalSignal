@@ -1,0 +1,31 @@
+# configs/early_7channel_cnngru.yaml
+
+defaults:
+  - base_config
+
+# --- 数据集配置 ---
+dataset:
+  channels_to_use: ['chest_ACC_x', 'chest_ACC_y', 'chest_ACC_z', 'chest_ECG', 'chest_EDA', 'chest_EMG', 'chest_Resp']
+
+# --- 模型配置 ---
+model:
+  name: "cnn_gru"
+  params:
+    in_channels: 3
+    num_classes: 3
+    # 这里可以暴露模型的超参数进行调优
+    cnn_out_channels: 32
+    gru_hidden_size: 64
+    gru_num_layers: 2
+    dropout: 0.5
+
+# --- 训练器配置 (覆盖) ---
+trainer:
+  epochs: 50
+  learning_rate: 0.001
+  early_stopping:
+    patience: 15 # 给更多耐心
+
+# --- 融合方式 ---
+fusion:
+  type: "early"
