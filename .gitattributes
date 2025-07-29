@@ -1,0 +1,5 @@
+*.yml linguist-language=YAML
+*.yaml linguist-language=YAML
+*.md linguist-language=Markdown
+*.ipynb linguist-language=Python
+*.py linguist-language=Python
