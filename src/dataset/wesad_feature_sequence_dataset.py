@@ -40,8 +40,10 @@ class WesadFeatureSequenceDataset(Dataset):
         self.sequences = np.array(self.sequences, dtype=np.float32)
         self.labels = np.array(self.labels, dtype=np.int64)
 
+
     def __len__(self):
         return len(self.labels)
+
 
     def __getitem__(self, idx):
         # 注意：这里的数据已经是 (sequence_length, in_features) 的形状

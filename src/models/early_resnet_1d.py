@@ -1,4 +1,4 @@
-# models/resnet_1d.py
+# models/early_resnet_1d.py
 import torch
 import torch.nn as nn
 

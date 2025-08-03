@@ -1,4 +1,4 @@
-# src/models/cnn_1d.py
+# src/models/early_cnn_1d.py
 import torch.nn as nn
 import torch.nn.functional as F
 

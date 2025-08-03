@@ -77,7 +77,7 @@ pip install -r requirements.txt
 
 **运行命令**:
 ```bash
-python preprocess.py
+python preprocess_old.py
 ```
 
 **产出**:

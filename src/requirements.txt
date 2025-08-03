@@ -1,8 +1,8 @@
 # requirements.txt
 # 基础库
-numpy # 2.2.6
+numpy>=1.26,<2.0 # 1.26.4
 pandas # 2.3.1
-jupyter # 1.1.1
+# jupyter # 1.1.1
 matplotlib # 3.10.3
 scipy # 1.15.3
 seaborn # 0.13.2
@@ -12,7 +12,7 @@ xgboost == 1.7.6
 
 # 核心库
 # PyTorch with CUDA 12.1 support
-torch==2.4.0
+https://mirrors.aliyun.com/pytorch-wheels/cu121/torch-2.4.0+cu121-cp310-cp310-win_amd64.whl
 pytorch_tabnet # 4.1.0
 
 # 专业库

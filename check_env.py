@@ -13,10 +13,10 @@ MAIN_DEPENDENCIES = [
     "scipy",  # 科学计算库
     "seaborn",  # 数据可视化库
 
-    "jupyter",  # Jupyter核心
-    "jupyterlab",  # JupyterLab界面
-    "ipykernel",  # Jupyter内核
-    "notebook",  # Jupyter Notebook
+    # "jupyter",  # Jupyter核心
+    # "jupyterlab",  # JupyterLab界面
+    # "ipykernel",  # Jupyter内核
+    # "notebook",  # Jupyter Notebook
     "sklearn",  # 机器学习库（scikit-learn）
 
     # "neurokit2",

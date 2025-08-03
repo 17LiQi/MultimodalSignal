@@ -1,4 +1,4 @@
-# models/mlp.py
+# models/feature_mlp.py
 import torch.nn as nn
 
 

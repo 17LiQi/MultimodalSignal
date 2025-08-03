@@ -20,7 +20,7 @@ class PositionalEncoding(nn.Module):
 
 
 class TransformerClassifier(nn.Module):
-    def __init__(self, in_channels, num_classes, **model_args):
+    def __init__(self, in_features, num_classes, **model_args):
         super(TransformerClassifier, self).__init__()
 
         d_model = model_args.get('d_model', 128)
@@ -30,7 +30,7 @@ class TransformerClassifier(nn.Module):
 
         # 1. 输入嵌入层 (用1D卷积模拟Patch Embedding)
         # 将每个时间步的 C 个通道映射到 d_model 维
-        self.input_embedding = nn.Linear(in_channels, d_model)
+        self.input_embedding = nn.Linear(in_features, d_model)
 
         # 2. 位置编码
         self.pos_encoder = PositionalEncoding(d_model)
@@ -43,33 +43,32 @@ class TransformerClassifier(nn.Module):
         # 4. 分类头
         self.classifier = nn.Linear(d_model, num_classes)
 
+        self.d_model = d_model
+
     def forward(self, x):
-        # x 初始形状: (batch_size, in_channels, seq_len)
+        # x 初始形状: (batch_size, sequence_length, in_features)
 
-        # 调整形状以适应Linear层和Transformer
-        # -> (batch_size, seq_len, in_channels)
-        x = x.permute(0, 2, 1)
+        # 1. 输入嵌入
+        # -> (batch_size, sequence_length, d_model)
+        x = self.input_embedding(x) * math.sqrt(self.d_model)  # 遵循原始 Transformer 论文的缩放
 
-        # 输入嵌入
-        # -> (batch_size, seq_len, d_model)
-        x = self.input_embedding(x)
-
-        # 位置编码 (需要调整形状)
-        # -> (seq_len, batch_size, d_model)
-        x = x.permute(1, 0, 2)
+        # 2. 位置编码
+        # TransformerEncoderLayer 期望的输入是 (seq_len, batch, features)
+        # 如果 batch_first=False。但因为我们设置了 batch_first=True，所以不需要 permute。
+        # 然而，PositionalEncoding 是按 (seq_len, batch, features) 设计的，所以这里需要临时转换一下。
+        x = x.permute(1, 0, 2)  # -> (sequence_length, batch_size, d_model)
         x = self.pos_encoder(x)
-        # -> (batch_size, seq_len, d_model)
-        x = x.permute(1, 0, 2)
+        x = x.permute(1, 0, 2)  # -> (batch_size, sequence_length, d_model)
 
-        # Transformer Encoder 处理
-        # -> (batch_size, seq_len, d_model)
+        # 3. Transformer Encoder 处理
+        # -> (batch_size, sequence_length, d_model)
         x = self.transformer_encoder(x)
 
-        # 使用序列的平均值进行分类 (一种常见的池化策略)
-        # -> (batch_size, d_model)
-        x = x.mean(dim=1)
+        # 4. 池化: 使用序列的第一个时间步的输出 (CLS token 思想的简化版) 或平均池化
+        x = x[:, 0, :]  # -> (batch_size, d_model)
+        # 或者 x = x.mean(dim=1)
 
-        # 分类
+        # 5. 分类
         logits = self.classifier(x)
 
         return logits

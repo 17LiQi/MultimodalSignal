@@ -30,4 +30,4 @@ trainer:
     mode: 'min'
 
 fusion:
-  type: "feature_sequence" # <--- 定义一个新的融合类型，以便 main.py 识别
+  type: "feature_sequence"

@@ -1,0 +1,22 @@
+# configs/sequence_transformer.yaml
+defaults:
+  - base_config
+
+dataset:
+  name: "wesad_sequence_feature" # 数据源是新的文件夹
+  sequence_params:
+    sequence_length: 20 # 每个样本包含20个5秒窗口 (100秒)
+    step: 5             # 序列之间滑动5个窗口 (25秒)
+
+model:
+  name: "transformer"
+  in_features: 26 # 24 (生理) + 2 (个体属性)
+  num_classes: 3
+  params:
+    d_model: 128
+    nhead: 8
+    num_layers: 4
+    dropout: 0.3
+
+fusion:
+  type: "sequence" # <--- 新的类型

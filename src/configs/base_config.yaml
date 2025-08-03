@@ -17,9 +17,13 @@ dataset:
   all_subjects: ['S2', 'S3', 'S4', 'S5', 'S6', 'S7', 'S8', 'S9', 'S10', 'S11', 'S13', 'S14', 'S15', 'S16', 'S17']
   # 从训练集中划分出作为验证集的比例
   val_split_ratio: 0.2
-  # 预处理时定义的所有通道名列表 (为了方便，也放在这里)
+  # 预处理时定义的所有通道名列表
   all_channel_names: ['chest_ACC_x', 'chest_ACC_y', 'chest_ACC_z', 'chest_ECG', 'chest_EDA', 'chest_EMG', 'chest_Resp',
                       'wrist_ACC_x', 'wrist_ACC_y', 'wrist_ACC_z', 'wrist_BVP', 'wrist_EDA']
+  # --- 新增: 为 feature_sequence 定义核心维度 ---
+  sequence_params:
+    sequence_length: 10
+    step: 1
 
 # --- 模型配置 ---
 model:

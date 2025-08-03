@@ -1,0 +1,33 @@
+# configs/feature_cnngru.yaml
+
+defaults:
+  - base_config
+
+dataset:
+  name: "wesad_feature_fusion"
+  channels_to_use: [ 'chest_ACC_x', 'chest_ACC_y', 'chest_ACC_z', 'chest_ECG', 'chest_EDA', 'chest_EMG', 'chest_Resp' ]
+
+  sequence_params:
+    sequence_length: 10
+    step: 1
+
+model:
+  name: "feature_cnn_gru"
+#  num_classes: 3
+  params:
+    # 新模型的超参数
+    in_features: 24
+    cnn_out_channels: 64
+    gru_hidden_size: 128
+    gru_num_layers: 2
+    dropout: 0.5
+
+trainer:
+  epochs: 100
+  learning_rate: 0.001
+  batch_size: 128
+  early_stopping:
+    patience: 15
+
+fusion:
+  type: "feature_sequence"

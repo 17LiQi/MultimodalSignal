@@ -1,18 +1,12 @@
-# dataset/wesad_feature_dataset.py
+# dataset/wesad_hrv_dataset.py
 import torch
 import numpy as np
-import pickle
-
-from sklearn.preprocessing import StandardScaler
 from torch.utils.data import Dataset
+from sklearn.preprocessing import StandardScaler
 
 
-class WesadFeatureDataset(Dataset):
+class WesadHrvDataset(Dataset):
     def __init__(self, data_path, subjects):
-        """
-        data_path: processed_data/feature_fusion/ 的路径
-        subjects: 要加载的受试者ID列表
-        """
         self.data_list = []
         self.labels_list = []
 
@@ -20,9 +14,9 @@ class WesadFeatureDataset(Dataset):
             x = np.load(data_path / f'{sid}_X.npy')
             y = np.load(data_path / f'{sid}_y.npy')
 
-            # --- 受试者内归一化  ---
-            # 为当前受试者的数据独立地进行 fit 和 transform
+            # 受试者内归一化 (在 1D 序列上)
             scaler = StandardScaler()
+            # fit_transform 需要 2D 输入，所以先 reshape
             x_scaled = scaler.fit_transform(x)
 
             self.data_list.append(x_scaled)
@@ -35,11 +29,13 @@ class WesadFeatureDataset(Dataset):
         return self.labels.shape[0]
 
     def __getitem__(self, idx):
-        # 数据已经是归一化后的特征向量
-        x_features = self.data[idx]
+        # 数据是 (seq_len,)
+        x_seq = self.data[idx]
         y = self.labels[idx]
 
-        x_tensor = torch.from_numpy(x_features).float()
+        # 增加一个通道维度以适应 CNN/Transformer 模型
+        # (seq_len,) -> (1, seq_len)
+        x_tensor = torch.from_numpy(x_seq).float().unsqueeze(0)
         y_tensor = torch.tensor(y, dtype=torch.long)
 
         return x_tensor, y_tensor

@@ -18,7 +18,7 @@ def main():
         base_conf = OmegaConf.load('configs/base_config.yaml')
 
         # *************************在这里切换配置**************************
-        exp_conf = OmegaConf.load('configs/early_transformer.yaml')
+        exp_conf = OmegaConf.load('configs/sequence_transformer.yaml')
         # ***************************************************************
 
         config = OmegaConf.merge(base_conf, exp_conf)

@@ -1,4 +1,4 @@
-# models/cnn_gru.py
+# models/early_cnn_gru.py
 import torch.nn as nn
 
 

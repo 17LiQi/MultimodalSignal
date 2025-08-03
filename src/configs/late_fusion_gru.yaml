@@ -1,0 +1,37 @@
+# configs/late_fusion_gru.yaml
+
+defaults:
+  - base_config
+
+# --- 晚期融合专属配置 ---
+fusion:
+  type: "late" # 明确这是晚期融合
+  # 定义所有需要独立训练的 "专家" 模态
+  # 脚本将为列表中的每一项都训练一个独立的 cnn_gru 模型
+  expert_channels:
+    - ['chest_ECG']
+    - ['chest_EDA']
+    - ['chest_Resp']
+    - ['wrist_BVP']
+    # - ['chest_ACC_x', 'chest_ACC_y', 'chest_ACC_z'] # 也可以包含多通道专家
+
+  # 定义融合策略: 'average' (平均概率) 或 'vote' (多数投票)
+  strategy: 'average'
+
+# --- 模型和训练器配置 (为每个专家模型共享) ---
+model:
+  name: "cnn_gru"
+
+  params:
+    # 这些参数会被每个专家模型使用
+    cnn_out_channels: 32
+    gru_hidden_size: 64
+    gru_num_layers: 2
+    dropout: 0.5
+
+trainer:
+  epochs: 50
+  learning_rate: 0.001
+  batch_size: 64
+  early_stopping:
+    patience: 10 # 单模态模型可能收敛更快

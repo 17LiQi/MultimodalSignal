@@ -8,25 +8,32 @@ from dataset.wesad_early_dataset import WesadEarlyFusionDataset
 from dataset.wesad_feature_dataset import WesadFeatureDataset
 from dataset.wesad_feature_sequence_dataset import WesadFeatureSequenceDataset
 from dataset.wesad_hybrid_dataset import WesadHybridDataset
+from dataset.wesad_hrv_dataset import WesadHrvDataset
+from dataset.wesad_sequence_dataset import WesadSequenceDataset
+from models.cnn_transformer_gru import CnnTransformerGru
 
-from models.cnn_1d import SimpleCNN1D
+from models.early_cnn_1d import SimpleCNN1D
 from models.feature_gru import FeatureGRU
 from models.hybrid import HybridModel
-from models.resnet_1d import ResNet1D
-from models.cnn_gru import CnnGruModel
-from models.mlp import MLP
-from models.tabnet import TabNetModelWrapper
+from models.early_resnet_1d import ResNet1D
+from models.early_cnn_gru import CnnGruModel
+from models.feature_mlp import MLP
+from models.feature_tabnet import TabNetModelWrapper
+from models.feature_xgboost import XGBoostModel
 from models.transformer_encoder import TransformerClassifier
-from models.xgboost import XGBoostModel
+from models.feature_cnn_gru import FeatureCnnGru
+
 
 from trainer.trainer import Trainer
 from trainer.ml_trainer import MLTrainer
 from trainer.tabnet_trainer import TabNetTrainer
 from utils.path_manager import get_path_manager
 
-
 def create_datasets(config, data_folder, train_subjects, val_subjects, test_subject):
     """根据配置创建训练、验证和测试数据集。"""
+    path = get_path_manager()
+    early_path = path.DATA_EARLY
+    feature_path = path.DATA_FEATURE
     if config.fusion.type == 'early':
         DatasetClass = WesadEarlyFusionDataset
         train_ds = DatasetClass(data_folder, train_subjects, config.dataset.channels_to_use,
@@ -49,9 +56,7 @@ def create_datasets(config, data_folder, train_subjects, val_subjects, test_subj
         test_ds = DatasetClass(data_folder, [test_subject], seq_params.sequence_length, seq_params.step)
     elif config.fusion.type == 'hybrid':
         DatasetClass = WesadHybridDataset
-        path = get_path_manager()
-        early_path = path.DATA_EARLY
-        feature_path = path.DATA_FEATURE
+
         seq_params = config.dataset.sequence_params
 
         train_ds = DatasetClass(early_path, feature_path, train_subjects, config.dataset.channels_to_use,
@@ -60,6 +65,21 @@ def create_datasets(config, data_folder, train_subjects, val_subjects, test_subj
                               config.dataset.all_channel_names, seq_params.sequence_length, seq_params.step)
         test_ds = DatasetClass(early_path, feature_path, [test_subject], config.dataset.channels_to_use,
                                config.dataset.all_channel_names, seq_params.sequence_length, seq_params.step)
+    elif config.fusion.type == 'hrv_sequence':
+        DatasetClass = WesadHrvDataset
+        data_folder = path.DATA_ROOT  / 'hrv_sequence'
+        train_ds = DatasetClass(data_folder, train_subjects)
+        val_ds = DatasetClass(data_folder, val_subjects)
+        test_ds = DatasetClass(data_folder, [test_subject])
+
+    elif config.fusion.type == 'sequence':
+        DatasetClass = WesadSequenceDataset
+        data_folder = path.DATA_ROOT / 'wesad_sequence_features'
+        seq_params = config.dataset.sequence_params
+
+        train_ds = DatasetClass(data_folder, train_subjects, seq_params.sequence_length, seq_params.step)
+        val_ds = DatasetClass(data_folder, val_subjects, seq_params.sequence_length, seq_params.step)
+        test_ds = DatasetClass(data_folder, [test_subject], seq_params.sequence_length, seq_params.step)
     else:
         raise ValueError(f"未知的融合类型: {config.fusion.type}")
     return train_ds, val_ds, test_ds
@@ -101,6 +121,8 @@ def create_model(config):
             return MLP(in_features=in_features, num_classes=num_classes, **model_args)
         if model_name == "feature_gru":
             return FeatureGRU(in_features=in_features, num_classes=num_classes, **model_args)
+        if model_name == 'feature_cnn_gru':
+            return FeatureCnnGru(in_features=in_features, num_classes=num_classes, **model_args)
         if model_name == "xgboost":
             return XGBoostModel(num_classes=num_classes, params=model_args)
         if model_name == "tabnet":
@@ -127,6 +149,29 @@ def create_model(config):
             feat_model = FeatureGRU(feat_in_features, num_classes, **dict(**feat_params))
 
             return HybridModel(raw_model, feat_model, num_classes, **model_args)
+
+    # *********************** hrv_sequence *********************** #
+    elif config.fusion.type == 'hrv_sequence':
+        # HRV 序列是单通道的
+        in_channels = 1
+        num_classes = config.model.num_classes
+        model_name = config.model.name
+        model_args = dict(config.model.get('params', {}))
+
+        if model_name == "cnn_gru":
+            return CnnGruModel(in_channels, num_classes, **model_args)
+
+        if model_name == "transformer":
+            return TransformerClassifier(in_channels, num_classes, **model_args)
+
+        if model_name == "cnn_transformer_gru":
+            return CnnTransformerGru(in_channels, num_classes, **model_args)
+
+    elif config.fusion.type == 'sequence':
+        in_features = config.model.in_features
+        model_args = dict(config.model.get('params', {}))
+        if model_name == "transformer":
+            return TransformerClassifier(in_features, num_classes, **model_args)
 
     raise ValueError(f"无法为配置创建模型: fusion='{config.fusion.type}', model='{model_name}'")
 
@@ -155,7 +200,7 @@ def run_one_fold(config, test_subject, all_subjects, paths, run_output_dir):
     # 4. 根据模型类型，选择并执行对应的训练/评估流程
     model_name = config.model.name
 
-    if model_name in ["cnn_1d", "resnet_1d", "cnn_gru", "mlp", "feature_gru", "hybrid", "transformer"]:
+    if model_name in ["cnn_1d", "resnet_1d", "cnn_gru", "mlp", "feature_gru", "hybrid", "transformer","feature_cnn_gru", "hrv_sequence", "cnn_transformer_gru"]:
         # PyTorch 流程
         model.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
 

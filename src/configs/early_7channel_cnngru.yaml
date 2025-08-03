@@ -11,8 +11,8 @@ dataset:
 model:
   name: "cnn_gru"
   params:
-    in_channels: 3
-    num_classes: 3
+#    in_channels: 3
+#    num_classes: 3
     # 这里可以暴露模型的超参数进行调优
     cnn_out_channels: 32
     gru_hidden_size: 64
