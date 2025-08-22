@@ -5,12 +5,14 @@ project_root: "."  # 当前目录
 wesad_dir:
   name: "WESAD"      # 数据目录名称
 
+output_dir:
+    name: "output"
+
 # 源代码目录配置
 src_dir:
   name: "src"
   modules:
     utils: "utils"     # utils模块目录
-    output: "output"   # 输出目录
     models: "models"   # 模型目录
     
 # 预处理数据目录配置

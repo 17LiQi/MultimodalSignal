@@ -8,7 +8,7 @@ class PathManager:
         if config_file is None:
             self._script_dir = Path(__file__).parent
             self._project_root = self._script_dir.parent.parent
-            config_file = self._project_root / "config" / "paths.yml"
+            config_file = self._project_root / "configs" / "paths.yml"
         else:
             config_file = Path(config_file).resolve()
             self._project_root = config_file.parent
@@ -36,13 +36,17 @@ class PathManager:
         wesad_cfg = self._config.get("wesad_dir", {})
         self.WESAD_ROOT = self._project_root / wesad_cfg.get("name", "WESAD")
         
+        # 输出目录
+        output_cfg = self._config.get("output_dir", {})
+        self.OUTPUT_ROOT = self._project_root / output_cfg.get("name", "output")
+        
         # 预处理数据目录
         data_cfg = self._config.get("data_dir", {})
         data_root = self._project_root / data_cfg.get("name", "data")
 
         self.DATA_ROOT = data_root
-        self.DATA_FEATURE = data_root / "wesad_feature_fusion"
-        self.DATA_EARLY = data_root / "wesad_early_fusion"
+        # self.DATA_FEATURE = data_root / "wesad_feature_fusion"
+        # self.DATA_EARLY = data_root / "wesad_early_fusion"
 
         # 主目录
         src_cfg = self._config.get("src_dir", {})
@@ -51,7 +55,7 @@ class PathManager:
         # 工具模块目录
         modules = src_cfg.get("modules", {})
         self.UTILS_ROOT = self.SRC_ROOT / modules.get("utils", "utils")
-        self.OUTPUT_ROOT = self.SRC_ROOT / modules.get("output", "output")
+
 
 def get_path_manager(config_file: Path = None) -> PathManager:
     return PathManager(config_file)
