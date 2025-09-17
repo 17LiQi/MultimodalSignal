@@ -1,50 +1,53 @@
-# 多模态生理信号压力识别系统
+
+# PhysioFormer 论文复现项目
 
 ## 1. 项目概述
 
-本项目基于 PyTorch 框架，旨在探索和实现先进的多模态生理信号融合模型，用于高精度地识别人体的压力状态。项目采用模块化和配置驱动的设计，支持对不同模型架构（CNN, GRU, ResNet, Transformer等）、不同融合策略（早期、中期、混合）以及不同生理信号组合的系统性消融实验。
+项目当前分支基于 PyTorch 框架，旨在**严格复现**论文 *《PhysioFormer: Integrating Multimodal Physiological Signals and Symbolic Regression for Explainable Affective State Prediction》* 中提出的情感状态预测模型。该论文声称在公开的WESAD数据集上取得了超过99%的惊人准确率。
 
-**核心研究问题**:
-*   不同生理信号模态对压力识别的贡献度。
-*   端到端学习（早期融合）与基于专家特征的（中期融合）方法的性能对比。
-*   先进深度学习模型（如Transformer）在生理时序信号分类任务上的有效性。
+本复现项目的核心目标是：
+*   **忠实实现**论文描述的预处理流程，特别是基于**特征工程 (Feature Engineering)** 的方法。
+*   精确构建论文中定义的 `ContribNet`, `AffectNet`, `AffectAnalyser` 三大核心模型模块。
+*   实现论文中包含自定义正则化项的复合损失函数。
+*   在一个严谨、排除了常见数据泄露风险的流程下，**验证并评估 `PhysioFormer` 架构的真实性能**。
+
+> **注意**: 本项目不包含论文中用于事后分析的“符号回归”部分，因为它不参与模型的训练和预测，对复现其核心性能没有影响。
 
 ## 2. 数据集说明
 
 *   **名称**: WESAD (WEarable Stress and Affect Detection)
-*   **简介**: 一个公开的、用于压力和情绪检测的可穿戴设备生理信号数据集。包含15名受试者在三种核心状态（中性、压力、娱乐）下的多模态数据。
+*   **简介**: 一个公开的、用于压力和情绪检测的可穿戴设备生理信号数据集。包含15名受试者在三种核心状态（**1-中性/基线, 2-压力, 3-娱乐**）下的多模态数据。
 *   **传感器数据**:
     *   **胸部 (RespiBAN)**: ECG, EDA, EMG, RESP, TEMP, ACC (均为 700Hz)。
     *   **腕部 (Empatica E4)**: ACC (32Hz), BVP (64Hz), EDA (4Hz), TEMP (4Hz)。
-*   **验证机制**: 包含每个阶段精确的起止时间戳和主观问卷（PANAS, STAI等）。
 
 ### 数据集资源
 
-*   **详细文档**: [WESAD官方说明](https://archive.ics.uci.edu/dataset/468/wesad+wearable+stress+and+affect+detection)
-*   **数据预览**: [交互式可视化数据预览](https://kristofvl.github.io/wesadviz/)
+*   **详细文档**: [WESAD官方说明](https://archive.ics.uci.edu/dataset/468/wesad+wearable+stress+affect+detection)
 *   **下载地址**: [官方云存储](https://uni-siegen.sciebo.de/s/HGdUkoNlW1Ub0Gx)
 
-> **注意**: 下载后，请将包含 `S2`, `S3` 等子文件夹的 `WESAD` 文件夹放置在根目录下。
+> **重要**: 下载后，请将包含 `S2`, `S3` 等子文件夹的 `WESAD` 文件夹放置在项目根目录下。
 
-## 3. 项目结构示意
+## 3. 项目结构
 
 ```
 .
 ├── configs/              # 存放所有实验的配置文件 (.yaml)
-├── data/                 # 存放预处理后的数据
-├── data_utils/           # PyTorch Dataset 类
-├── models/               # 模型定义 (.py)
-├── trainer/              # 训练器类
-├── utils/                # 辅助函数 (路径管理, 早停等)
+├── data/                 # 存放预处理后的数据 (physioformer_processed/)
 ├── output/               # 保存所有实验结果 (日志, 模型权重, 混淆矩阵)
-├── preprocess.py         # 数据预处理脚本
-├── main.py               # 主训练/评估脚本
+├── src/
+│   ├── dataset/          # PyTorch Dataset 类 (dataset.py)
+│   ├── models/           # 模型定义 (physioformer_model.py)
+│   ├── trainer/          # 训练器类 (trainer.py)
+│   ├── utils/            # 辅助函数 (early_stopping.py, cvxEDA.py 等)
+│   ├── preprocess.py     # 核心数据预处理脚本
+│   └── main.py           # 主训练/评估脚本
 └── requirements.txt      # Python 依赖
 ```
 
 ## 4. 环境配置
 
-*   **必要工具**: Conda 包管理工具
+*   **必要工具**: Conda
 *   **硬件要求**: 推荐使用支持 CUDA 的 NVIDIA GPU
 
 ### 步骤 1: 创建 Conda 虚拟环境
@@ -54,18 +57,29 @@ conda create -n emo-env python=3.10 -y
 conda activate emo-env
 ```
 
-### 步骤 2: 安装依赖包
+### 步骤 2: 安装 Python 依赖包
 
-为加速下载，建议配置国内镜像源。
+本项目依赖于多个科学计算库，其中 `cvxEDA` 需要特别处理。
 
 ```bash
-# 配置清华镜像源
+# (可选) 配置国内镜像源以加速下载
 pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
-pip config set install.trusted-host pypi.tuna.tsinghua.edu.cn
 
-# 安装依赖
+# 安装 requirements.txt 中的大部分依赖
 pip install -r requirements.txt
 ```
+
+### 步骤 3: 【关键】安装 `cvxEDA` 和 `cvxpy`
+
+`cvxEDA` 库未发布在PyPI，需要我们手动集成。
+
+1.  **复制核心文件**:
+    *   在其他地方（例如，使用 `git clone https://github.com/lciti/cvxEDA.git`）获取 `cvxEDA` 的源代码。
+    *   找到其中的 `cvxeda.py` 文件。
+    *   将这个 **`cvxeda.py` 文件**复制到本项目的 `src/utils/` 目录下。
+
+2.  **安装 `git` (如果尚未安装)**:
+    部分依赖可能需要从GitHub直接安装，请确保您的系统中已安装 [Git](https://git-scm.com/downloads)。
 
 ## 5. 运行说明
 
@@ -73,83 +87,61 @@ pip install -r requirements.txt
 
 ### 步骤 1: 数据预处理
 
-该步骤会将原始的 `.pkl` 文件转换为模型可以直接读取的、窗口化的 `.npy` 数据。
+该步骤是复现成功的**关键**。它会将原始的 `.pkl` 文件严格按照论文描述，转换为包含大量特征工程的 `.npy` 数据文件。
+
+**核心流程**:
+1.  **重采样**: 将所有生理信号统一重采样到 64Hz。
+2.  **窗口化**: 使用30秒**无重叠**窗口进行数据切片。
+3.  **特征提取**: 对每个窗口，使用 `NeuroKit2` 和 `cvxEDA` 等库提取数十种统计学和生理学特征。
+4.  **整合**: 将提取的动态特征与被试者的静态个人属性（年龄、性别等）合并。
+5.  **归一化**: 对最终的特征矩阵进行全局标准化。
 
 **运行命令**:
 ```bash
-python preprocess_old.py
+# 确保你在目录根目录下或直接运行 preprocess.py 脚本。
+python preprocess.py
 ```
 
 **产出**:
-此脚本运行一次即可，它会在 `src/data/processed_data/` 目录下生成两个关键子文件夹：
-*   `wesad_early_fusion/`: 存放为早期融合准备的、重采样到 64Hz 的原始信号段。
-*   `wesad_feature_fusion/`: 存放为中期融合准备的、使用 `NeuroKit2` 提取的高级生理特征向量。
+此脚本运行一次即可。它会在 `data` 目录下生成 `X_wrist.npy`, `y_wrist.npy`, `X_chest.npy`, `y_chest.npy` 等文件。
 
-> **注意**: 如果您修改了 `preprocess.py` 中的任何逻辑（如窗口大小、步长等），请务必**删除** `processed_data` 文件夹并重新运行此脚本，以确保数据的一致性。
+> **注意**: 如果您修改了 `preprocess.py` 中的任何逻辑，请务必**删除** `data` 文件夹并重新运行此脚本。
 
-### 步骤 2: 运行实验
+### 步骤 2: 运行模型训练与评估
 
-所有实验都通过主脚本 `main.py` 启动，并通过修改配置文件来控制。
+所有实验都通过主脚本 `main.py` 启动。
 
-**核心流程**:
-1.  **选择一个实验**: 打开 `configs/` 目录，选择一个您想运行的实验配置文件，例如 `exp_early_transformer.yaml`。
-2.  **配置 `main.py`**: 打开 `main.py` 文件，找到 `if __name__ == '__main__':` 部分。
-3.  **修改加载的配置文件名**: 将 `exp_conf = OmegaConf.load(...)` 这一行中的文件名修改为您选择的实验配置文件名。
+**运行命令**:
+```bash
+# 确保你在 src 目录下或直接运行 main.py 脚本。
+cd src
+python main.py
+```
 
-    ```python
-    # main.py
-    try:
-        base_conf = OmegaConf.load('configs/base_config.yaml')
-
-        # *************************在这里切换配置**************************
-        exp_conf = OmegaConf.load('configs/early_transformer.yaml')
-        # ***************************************************************
-
-        config = OmegaConf.merge(base_conf, exp_conf)
-        print(f"配置已加载, 当前配置:\n{OmegaConf.to_yaml(exp_conf)}")
-    except Exception as e:
-        print(f"错误: 无法加载配置文件。 {e}")
-        exit()
-    ```
-4.  **运行训练**:
-    ```bash
-    python main.py
-    ```
+**自定义实验**:
+*   **切换数据集**: 打开 `main.py`，在 `CONFIG` 字典中修改 `dataset_type: 'wrist'` 为 `'chest'` 来训练胸部数据集。
+*   **调整超参数**: 您可以在 `main.py` 的 `CONFIG` 字典中轻松调整学习率 (`learning_rate`)、批大小 (`batch_size`)、正则化强度 (`lambda_reg`) 等。
 
 **结果查看**:
-*   **实时进度**: 训练过程的实时进度将显示在终端。
-*   **详细结果**: 每次运行都会在 `output/` 目录下创建一个带时间戳的文件夹，例如 `output/wesad_early_fusion/transformer/run_20250722_103000/`。
-*   **内部结构**: 该文件夹下会为**每一次**留一法交叉验证的折叠（例如 `fold_test_on_S2/`）保存详细的训练日志 (`training_log.txt`)、最佳模型权重 (`best_model.pt`) 和测试集的混淆矩阵 (`test_confusion_matrix.png`)。
-*   **最终总结**: 运行结束后，主运行目录下会生成一个 `cv_summary.txt` 文件，包含了所有折叠的性能汇总和最终的平均准确率/F1分数。
+*   **实时进度**: 训练过程的损失和准确率将实时显示在终端。
+*   **详细结果**: 每次运行都会在 `output/` 目录下创建一个带时间戳的文件夹（例如 `output/physioformer_run_20250821_180000/`）。
+*   **文件夹内容**:
+    *   `training_log.txt`: 详细的逐轮训练日志。
+    *   `best_model.pt`: 在验证集上性能最佳的模型权重。
+    *   `confusion_matrix.png`: 测试集结果的可视化混淆矩阵。
+    *   **最终报告**: `training_log.txt` 的末尾包含了测试集上的**最终分类报告 (Classification Report)**。
 
-## 6. 如何进行新的实验 (示例)
+## 6. 常见问题
 
-假设您想对比**7通道CNN-GRU**和**3通道Transformer**的性能：
-
-1.  **运行实验 A (CNN-GRU)**:
-    *   在 `main.py` 中，设置 `exp_conf = OmegaConf.load('configs/7channel_cnngru.yaml')`。
-    *   运行 `python main.py`。
-    *   在 `output/` 目录下查看结果。
-2.  **运行实验 B (Transformer)**:
-    *   在 `main.py` 中，设置 `exp_conf = OmegaConf.load('configs/early_transformer.yaml')`。
-    *   运行 `python main.py`。
-    *   在 `output/` 目录下查看结果。
-3.  **对比结果**: 比较两次运行生成的 `cv_summary.txt` 文件中的最终平均性能。
-
-## 7. 常见问题
-
-1.  **无法安装 PyTorch 或只能安装 CPU 版**
-    *   **解决方法**: 确认您的 CUDA 版本，并尝试从 PyTorch 官网获取对应的安装命令，或使用国内镜像提供的预编译包。例如，针对 CUDA 12.1:
-    ```bash
-    pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-    ```
-
-2.  **OSError: [WinError 126] 找不到指定的模块** (例如 `fbgemm.dll`)
-    *   这通常是由于缺少 Visual C++ 运行库等底层依赖。
+1.  **`cvxEDA` 报错或无法导入**
     *   **解决方法**:
-        1.  下载并安装最新版的 [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist?view=msvc-170)。
-        2.  (推荐) 使用 [Dependencies](https://github.com/lucasg/Dependencies) 工具分析缺失的 `.dll` 文件，并手动安装对应的库。
+        1.  确保 `cvxeda.py` 文件已**正确复制**到 `src/utils/` 目录下。
+        2.  确保 `cvxpy` 已成功安装 (`pip install cvxpy`)。
+        3.  确保 `main.py` 顶部的 `import` 语句能正确找到它（`from utils.cvxEDA import cvxEDA`）。
 
-3.  **`num_workers > 0` 时报错或变慢**
-    *   这是 PyTorch 在 Windows 上的一个常见问题。
-    *   **解决方法**: 在 `configs/base_config.yaml` 文件中，将 `trainer.num_workers` 的值设置为 `0`。这将禁用多进程数据加载，但能保证程序的稳定性。
+2.  **`num_workers > 0` 时报错或卡住**
+    *   这是 PyTorch 在 Windows 上的常见问题。
+    *   **解决方法**: 在 `main.py` 中创建 `DataLoader` 时，确保 `num_workers=0`。
+
+3.  **CUDA 相关错误 (e.g., "CUDA out of memory")**
+    *   **解决方法**: 您的 GPU 显存不足。请在 `main.py` 的 `CONFIG` 字典中减小 `batch_size` 的值（例如从16减到8或4）。

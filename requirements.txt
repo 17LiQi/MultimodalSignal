@@ -8,16 +8,17 @@ scipy # 1.15.3
 seaborn # 0.13.2
 tqdm # 4.67.1
 scikit-learn # 1.7.1
-xgboost == 1.7.6
+# xgboost == 1.7.6
 
 # 核心库
 # PyTorch with CUDA 12.1 support
 https://mirrors.aliyun.com/pytorch-wheels/cu121/torch-2.4.0+cu121-cp310-cp310-win_amd64.whl
-pytorch_tabnet # 4.1.0
+# pytorch_tabnet # 4.1.0
 
 # 专业库
-neurokit2 # 0.2.12
-
+#neurokit2 # 0.2.12
+# EMD-signal # 1.6.4
+#cvxopt # 1.3.2
 # 配置库
 PyYAML # 6.0.2
-OmegaConf # 2.3.0
+#OmegaConf # 2.3.0
