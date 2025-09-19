@@ -1,5 +1,3 @@
-# 指定特定文件类型
 *.md text=auto linguist-language=Markdown
 *.py text=auto linguist-language=Python
-*.yaml text=auto linguist-language=YAML
-*.yml text=auto linguist-language=YAML
+

@@ -1,200 +1,232 @@
-# trainer.py
-
 import torch
 import time
 import numpy as np
-import pandas as pd
+from sklearn.utils import compute_class_weight
+from sklearn.metrics import accuracy_score, f1_score, confusion_matrix
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from tqdm import tqdm
 from pathlib import Path
-from datetime import datetime
-from typing import Dict, List
-
-from sklearn.metrics import accuracy_score, f1_score, classification_report, confusion_matrix
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from src.models.physioformer_model import PhysioFormer
-from src.trainer.custom_loss import PhysioFormerLoss
-from utils.early_stopping import EarlyStopping
+class EarlyStopping:
+    def __init__(self, patience=7, delta=0, checkpoint_path='checkpoint.pt', verbose=False, log_func=None):
+        self.patience = patience
+        self.delta = delta
+        self.checkpoint_path = checkpoint_path
+        self.verbose = verbose
+        self.log_func = log_func
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
 
+    def __call__(self, score, model):
+        if self.best_score is None:
+            self.best_score = score
+            self.save_checkpoint(model)
+        elif score < self.best_score + self.delta:
+            self.counter += 1
+            if self.verbose and self.log_func:
+                self.log_func(f"EarlyStopping counter: {self.counter}/{self.patience}")
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = score
+            self.save_checkpoint(model)
+            self.counter = 0
 
-class PhysioFormerTrainer:
-    def __init__(self, model: PhysioFormer, config: Dict, output_dir: Path, num_classes: int, class_names: List[str]):
-        """
-        Trainer for the PhysioFormer model.
+    def save_checkpoint(self, model):
+        torch.save(model.state_dict(), self.checkpoint_path)
 
-        Args:
-            model (PhysioFormer): The PhysioFormer model instance.
-            config (Dict): A dictionary containing trainer configurations (lr, epochs, etc.).
-            output_dir (Path): Directory to save logs, models, and results.
-            num_classes (int): The number of classes for classification.
-            class_names (List[str]): A list of class names for reporting (e.g., ['Neutral', 'Stress', 'Amusement']).
-        """
+class Trainer:
+    def __init__(self, model, fold_output_dir: Path, config):
         self.model = model
+        self.fold_dir = fold_output_dir
         self.config = config
-        self.output_dir = output_dir
-        self.num_classes = num_classes
-        self.class_names = class_names
 
-        # Create output directories if they don't exist
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.log_file = self.output_dir / 'training_log.txt'
+        # 确保输出目录存在
+        self.fold_dir.mkdir(parents=True, exist_ok=True)
+        self.log_file = self.fold_dir / 'training_log.txt'
 
-        # Initialize log file
+        # 初始化日志文件
         with open(self.log_file, 'w') as f:
-            f.write(f"PhysioFormer Training log starting at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Training log for run starting at {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write("=" * 50 + "\n")
 
-        # Setup device, optimizer, and loss function
+        # 设置设备
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.config['learning_rate'])
-        self.criterion = PhysioFormerLoss(lambda_reg=self.config.get('lambda_reg', 0.1))
 
-        # Initialize Early Stopping
-        self.early_stopping = EarlyStopping(
-            patience=self.config['early_stopping']['patience'],
-            checkpoint_path=self.output_dir / 'best_model.pt',
-            log_func=self._log
+        # 从 config 中提取参数
+        self.epochs = config['trainer']['epochs']
+        self.learning_rate = config['trainer']['learning_rate']
+        self.patience = config['trainer']['early_stopping']['patience']
+        self.weight_decay = config['trainer']['weight_decay']
+        self.use_class_weights = config['trainer'].get('use_class_weights', False)
+
+        # 设置优化器和损失函数
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
+        self.criterion = torch.nn.CrossEntropyLoss().to(self.device)
+
+        # 设置学习率调度器
+        self.scheduler = ReduceLROnPlateau(
+            self.optimizer,
+            mode='min',  # 监控 val_loss
+            factor=0.1,  # 学习率衰减为 10%
+            patience=3
         )
 
-    def _log(self, message: str):
-        """Logs a message to the console and the log file."""
-        tqdm.write(message)
+        # 动态设置类别加权损失
+        class_weights = None
+        if self.use_class_weights and hasattr(config['trainer'], 'train_dataset'):
+            self._log("计算类别权重...")
+            try:
+                train_dataset = config['trainer']['train_dataset']
+                class_weights = compute_class_weight(
+                    'balanced',
+                    classes=np.unique(train_dataset.y_data),
+                    y=train_dataset.y_data
+                )
+                class_weights = torch.tensor(class_weights, dtype=torch.float).to(self.device)
+                self._log(f"已启用类别加权损失，权重为: {class_weights.cpu().numpy()}")
+            except Exception as e:
+                self._log(f"警告: 类别权重计算失败 - {e}。将使用标准损失函数。")
+                class_weights = None
+
+        if class_weights is not None:
+            self.criterion = torch.nn.CrossEntropyLoss(weight=class_weights).to(self.device)
+
+        # 设置早停
+        self.early_stopping = None
+        if config['trainer']['early_stopping']['enabled']:
+            self.early_stopping = EarlyStopping(
+                patience=self.patience,
+                delta=config['trainer']['early_stopping']['delta'],
+                checkpoint_path=self.fold_dir / 'best_model.pt',
+                verbose=True,
+                log_func=self._log
+            )
+
+        # 记录总训练开始时间
+        self.total_start_time = time.time()
+
+    def _log(self, message):
+        """记录日志到文件和控制台"""
+        print(message)
         with open(self.log_file, 'a') as f:
             f.write(message + '\n')
 
     def train(self, train_loader, val_loader):
-        self._log("\n--- Starting Training ---")
-        self._log(f"Device: {self.device}")
+        best_val_acc = 0  # 追踪最佳验证准确率
 
-        for epoch in range(self.config['epochs']):
+        for epoch in range(self.epochs):
             epoch_start_time = time.time()
-
-            # --- Training Phase ---
             self.model.train()
-            total_train_loss = 0.0
-            train_preds, train_labels = [], []
+            train_loss = 0.0
 
-            progress_bar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{self.config['epochs']} [Training]")
+            # 训练进度条
+            progress_bar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{self.epochs} [Training]")
+
             for inputs, labels in progress_bar:
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
+                inputs = inputs.to(self.device)
+                labels = labels.to(self.device)
 
                 self.optimizer.zero_grad()
-
-                model_output = self.model(inputs)
-                loss = self.criterion(model_output, labels)
-
+                outputs = self.model(inputs)
+                loss = self.criterion(outputs, labels)
                 loss.backward()
                 self.optimizer.step()
 
-                total_train_loss += loss.item()
-
-                # For calculating training accuracy
-                preds = torch.argmax(model_output['logits'], dim=1)
-                train_preds.extend(preds.cpu().numpy())
-                train_labels.extend(labels.cpu().numpy())
-
+                batch_size = labels.size(0)
+                train_loss += loss.item() * batch_size
                 progress_bar.set_postfix(loss=loss.item())
 
-            # --- Validation Phase ---
-            val_results = self.evaluate(val_loader, is_test_set=False)
+            epoch_end_time = time.time()
+            epoch_duration = epoch_end_time - epoch_start_time
 
-            avg_train_loss = total_train_loss / len(train_loader)
-            train_acc = accuracy_score(train_labels, train_preds)
+            # 验证
+            val_loss, val_acc, val_f1, val_preds, val_labels = self.evaluate(val_loader, is_val=True)
+            self.scheduler.step(val_loss)
 
-            epoch_duration = time.time() - epoch_start_time
-            log_msg = (
-                f"Epoch {epoch + 1}/{self.config['epochs']} | Time: {epoch_duration:.2f}s | "
-                f"Train Loss: {avg_train_loss:.4f} | Train Acc: {train_acc * 100:.2f}% | "
-                f"Val Loss: {val_results['loss']:.4f} | Val Acc: {val_results['accuracy'] * 100:.2f}%"
-            )
+            # 保存最佳验证准确率的混淆矩阵
+            if val_acc > best_val_acc:
+                best_val_acc = val_acc
+                # self.plot_confusion_matrix(val_labels, val_preds, filename="validation_cm.png")
+
+            # 记录日志
+            log_msg = (f"Epoch {epoch + 1}/{self.epochs} | "
+                       f"耗时: {epoch_duration:.2f}s | "
+                       f"训练损失: {train_loss / len(train_loader.dataset):.4f} | "
+                       f"验证损失: {val_loss:.4f} | "
+                       f"验证Acc: {val_acc:.4f} | "
+                       f"验证F1: {val_f1:.4f}")
             self._log(log_msg)
 
-            # --- Early Stopping Check ---
-            self.early_stopping(val_results['loss'], self.model)
-            if self.early_stopping.early_stop:
-                self._log("Early stopping triggered!")
-                break
+            # 早停检查
+            if self.early_stopping:
+                score_to_monitor = val_loss
+                self.early_stopping(score_to_monitor, self.model)
+                if self.early_stopping.early_stop:
+                    self._log("触发早停")
+                    break
 
-        self._log("--- Training Finished ---")
-        self._log(f"Loading best model weights from: {self.early_stopping.checkpoint_path}")
-        self.model.load_state_dict(torch.load(self.early_stopping.checkpoint_path))
+        # 加载最佳模型
+        if self.early_stopping and self.early_stopping.early_stop:
+            self._log(f"加载性能最佳的模型权重从: {self.early_stopping.checkpoint_path}")
+            self.model.load_state_dict(torch.load(self.early_stopping.checkpoint_path, weights_only=True))
 
-    def evaluate(self, data_loader, is_test_set: bool = True) -> Dict:
-        """
-        Evaluates the model on a given dataset.
+        total_end_time = time.time()
+        total_duration = total_end_time - self.total_start_time
+        self._log(f"--- 训练完成 --- 总训练时长: {total_duration:.2f}秒")
 
-        Args:
-            data_loader: The DataLoader for the dataset to evaluate.
-            is_test_set (bool): If True, will print a detailed report and save results.
-
-        Returns:
-            A dictionary containing performance metrics.
-        """
+    def evaluate(self, data_loader, is_test=False, is_val=False):
         self.model.eval()
         total_loss = 0.0
-        all_preds, all_labels = [], []
+        all_preds = []
+        all_labels = []
 
-        desc = "Testing" if is_test_set else "Validating"
         with torch.no_grad():
-            for inputs, labels in tqdm(data_loader, desc=desc):
-                inputs, labels = inputs.to(self.device), labels.to(self.device)
+            for inputs, labels in data_loader:
+                inputs = inputs.to(self.device)
+                labels = labels.to(self.device)
 
-                model_output = self.model(inputs)
-                loss = self.criterion(model_output, labels)
-                total_loss += loss.item()
+                outputs = self.model(inputs)
+                loss = self.criterion(outputs, labels)
 
-                preds = torch.argmax(model_output['logits'], dim=1)
+                batch_size = labels.size(0)
+                total_loss += loss.item() * batch_size
+
+                _, preds = torch.max(outputs, 1)
                 all_preds.extend(preds.cpu().numpy())
                 all_labels.extend(labels.cpu().numpy())
 
-        avg_loss = total_loss / len(data_loader)
-        accuracy = accuracy_score(all_labels, all_preds)
+        loss = total_loss / len(data_loader.dataset)
+        acc = accuracy_score(all_labels, all_preds)
         f1 = f1_score(all_labels, all_preds, average='weighted')
 
-        results = {
-            "loss": avg_loss,
-            "accuracy": accuracy,
-            "f1_score_weighted": f1,
-            "predictions": np.array(all_preds),
-            "true_labels": np.array(all_labels)
-        }
+        if is_test:
+            self.plot_confusion_matrix(all_labels, all_preds, filename="test_confusion_matrix.png")
+            self._log(f"\n--- 最终测试结果 ---")
+            self._log(f"测试损失: {loss:.4f} | 测试Acc: {acc:.4f} | 测试F1: {f1:.4f}")
 
-        if is_test_set:
-            self._log("\n===== Final Test Set Performance =====")
-            self._log(f"\nOverall Accuracy: {accuracy:.4f}")
-            self._log(f"Weighted F1-score: {f1:.4f}\n")
+        if is_val:
+            return loss, acc, f1, all_preds, all_labels
 
-            # --- Classification Report ---
-            report = classification_report(
-                results["true_labels"],
-                results["predictions"],
-                target_names=self.class_names,
-                labels=np.arange(len(self.class_names)),
-                digits=4,
-                zero_division=0  # Avoid warnings for classes with no support
-            )
-            self._log("--- Classification Report ---")
-            self._log(report)
+        return loss, acc, f1
 
-            # --- Confusion Matrix ---
-            self._log("--- Confusion Matrix ---")
-            cm = confusion_matrix(results["true_labels"], results["predictions"])
-            self._log(str(cm))
-            self.plot_confusion_matrix(cm)
-
-        return results
-
-    def plot_confusion_matrix(self, cm):
-        """Saves a plot of the confusion matrix."""
-        plt.figure(figsize=(8, 6))
-        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                    xticklabels=self.class_names, yticklabels=self.class_names)
-        plt.xlabel('Predicted Label')
-        plt.ylabel('True Label')
-        plt.title('Confusion Matrix')
-
-        save_path = self.output_dir / 'confusion_matrix.png'
-        plt.savefig(save_path)
-        plt.close()
-        self._log(f"Confusion matrix plot saved to: {save_path}")
+    def plot_confusion_matrix(self, true_labels, pred_labels, filename="confusion_matrix.png"):
+        try:
+            cm = confusion_matrix(true_labels, pred_labels)
+            plt.figure(figsize=(8, 6))
+            sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+                        xticklabels=['Neutral', 'Amusement', 'Stress'],
+                        yticklabels=['Neutral', 'Amusement', 'Stress'])
+            plt.xlabel('Predicted Label')
+            plt.ylabel('True Label')
+            plt.title('Confusion Matrix')
+            cm_path = self.fold_dir / filename
+            plt.savefig(cm_path)
+            plt.close()
+            self._log(f"混淆矩阵已保存至: {cm_path}")
+        except Exception as e:
+            self._log(f"保存混淆矩阵失败: {str(e)}")

@@ -1,6 +1,6 @@
 # requirements.txt
 # 基础库
-numpy>=1.26,<2.0 # 1.26.4
+# numpy>=1.26,<2.0 # 1.26.4
 pandas # 2.3.1
 # jupyter # 1.1.1
 matplotlib # 3.10.3

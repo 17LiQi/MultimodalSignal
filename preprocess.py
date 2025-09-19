@@ -4,40 +4,30 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from scipy import signal
-from sklearn.preprocessing import StandardScaler
-import warnings
 from tqdm import tqdm
 
-# --- 1. CONFIGURATION (All settings are here) ---
-PROJECT_ROOT = Path(__file__).resolve().parent
-WESAD_ROOT = PROJECT_ROOT / "WESAD"
-OUTPUT_ROOT = PROJECT_ROOT / "data"
+# --- 1. 参数直接定义 ---
+WESAD_ROOT = Path('./WESAD')
+OUTPUT_PATH = Path('./data')
+OUTPUT_PATH.mkdir(parents=True, exist_ok=True)
 
-# Signal Processing Settings
-WINDOW_SEC = 30  # How many seconds in each window
-TARGET_FS = 64  # The uniform sampling rate to resample all signals to
+# 信号和窗口化参数
+CHEST_FS = 700
+WRIST_FS = {'ACC': 32, 'BVP': 64, 'EDA': 4, 'TEMP': 4}
+TARGET_FS = 64
+WINDOW_SEC = 30
+# 我们将使用所有胸部和腕部信号
+CHEST_CHANNELS = ['ACC', 'ECG', 'EDA', 'EMG', 'Resp', 'Temp']
+WRIST_CHANNELS = ['ACC', 'BVP', 'EDA', 'TEMP']
 
-# We can keep the smart stepping for efficiency
-TASK_STEPS_SEC = {
-    'Base': 15,
-    'TSST': 5,
-    'Fun': 5,
-    'Medi 1': 15,
-    'Medi 2': 15,
-    # Add other tasks if needed, with a default fallback
-}
-DEFAULT_STEP_SEC = WINDOW_SEC / 2  # 50% overlap for any task not in the dict
-
-# Label Mapping (0: neutral, 1: amusement, 2: stress)
-LABEL_MAP = {1: 0, 3: 1, 2: 2, 4: 0}  # Baseline(1) and Meditation(4) -> 0 (neutral)
+# 标签映射 (2:stress, 1:amusement, 0:baseline/neutral/meditation)
+LABEL_MAP = {1: 0, 2: 2, 3: 1, 4: 0}
 
 
-# --- 2. HELPER FUNCTIONS ---
-
+# --- 2. 辅助函数 ---
 def parse_quest_csv(subject_id: str, wesad_root: Path) -> pd.DataFrame:
-    # (Your existing, excellent quest parsing function)
+    """动态解析指定受试者的 _quest.csv 文件，以获取任务顺序和时间。"""
     quest_path = wesad_root / subject_id / f"{subject_id}_quest.csv"
-    # ... (the rest of your function is perfect)
     df_raw = pd.read_csv(quest_path, sep=';', header=None, skip_blank_lines=True)
 
     order_row = df_raw[df_raw[0].str.contains('# ORDER', na=False)].values[0]
@@ -48,156 +38,133 @@ def parse_quest_csv(subject_id: str, wesad_root: Path) -> pd.DataFrame:
     start_times = pd.Series(start_row[1:]).dropna().astype(float).tolist()
     end_times = pd.Series(end_row[1:]).dropna().astype(float).tolist()
 
-    return pd.DataFrame({'task': tasks, 'start_min': start_times, 'end_min': end_times})
+    if not (len(tasks) == len(start_times) == len(end_times)):
+        raise ValueError(f"为受试者 {subject_id} 解析出的任务、开始、结束时间长度不匹配!")
+
+    protocol_df = pd.DataFrame({
+        'task': tasks,
+        'start_min': start_times,
+        'end_min': end_times
+    })
+    return protocol_df
 
 
 def load_pkl(subject_id: str, wesad_root: Path):
+    """加载指定受试者的 pkl 文件。"""
     pkl_path = wesad_root / subject_id / f"{subject_id}.pkl"
-    if not pkl_path.exists():
-        print(f"Warning: PKL file not found for {subject_id}")
+    try:
+        with open(pkl_path, 'rb') as f:
+            data = pickle.load(f, encoding='bytes')
+            return data
+    except FileNotFoundError:
+        print(f"警告: 无法找到文件 {pkl_path}")
         return None
-    with open(pkl_path, 'rb') as f:
-        data = pickle.load(f, encoding='bytes')
-    return data
 
 
-# --- 3. MAIN PREPROCESSING LOGIC ---
+def _get_windows(data_len, protocol_df, original_fs):
+    """根据协议生成窗口索引，适配统一的 TARGET_FS。"""
+    windows = []
+    labels = []
+    task_to_label_map = {'Base': 1, 'TSST': 2, 'Fun': 3, 'Medi1': 4, 'Medi2': 4}
 
-class WesadPreprocessor:
-    def __init__(self):
-        self.wesad_root = WESAD_ROOT
-        self.output_path = OUTPUT_ROOT
-        self.output_path.mkdir(parents=True, exist_ok=True)
+    for _, row in protocol_df.iterrows():
+        task = row['task'].replace(" ", "").strip()
+        original_label = task_to_label_map.get(task)
+        if original_label is None:
+            continue
+        label = LABEL_MAP.get(original_label)
+        if label is None:
+            continue
 
-        self.CHEST_FS = 700
-        self.WRIST_FS = {'ACC': 32, 'BVP': 64, 'EDA': 4, 'TEMP': 4}
+        start_idx = int(row['start_min'] * 60 * original_fs)
+        end_idx = int(row['end_min'] * 60 * original_fs)
+        window_samples = int(WINDOW_SEC * original_fs)
+        step_samples = window_samples // 2  # 50% 重叠
 
-        # Define all channels we want to use
-        self.CHEST_CHANNELS = ['ACC', 'ECG', 'EDA', 'EMG', 'Resp', 'Temp']
-        self.WRIST_CHANNELS = ['ACC', 'BVP', 'EDA', 'TEMP']
+        if end_idx > data_len:
+            print(f"警告: 任务 '{row['task']}' 的结束索引 ({end_idx}) 超出数据长度 ({data_len})。将截断至数据末尾。")
+            end_idx = data_len
 
-        warnings.filterwarnings('ignore', category=FutureWarning)
+        for i in range(start_idx, end_idx - window_samples + 1, step_samples):
+            windows.append((i, i + window_samples))
+            labels.append(label)
 
-    def process_all_subjects(self):
-        subject_ids = [f"S{i}" for i in range(2, 18) if i != 12]
+    return windows, np.array(labels)
 
-        print("--- Step 1: Processing each subject and saving individual data files ---")
-        for sid in tqdm(subject_ids, desc="Processing Subjects"):
-            self._process_and_save_subject(sid)
 
-        print("\n--- Step 2: Generating normalization parameters for each LOSO fold ---")
-        for test_subject in tqdm(subject_ids, desc="Generating Scalers"):
-            train_subjects = [s for s in subject_ids if s != test_subject]
+# --- 3. 主预处理函数 ---
+def run_preprocessing():
+    subject_ids = [f"S{i}" for i in range(2, 18) if i != 12]
+    print(f"--- 开始预处理 {len(subject_ids)} 位受试者 ---")
 
-            # Concatenate all training data for this fold
-            X_train_fold_list = [np.load(self.output_path / f'{sid}_X.npy') for sid in train_subjects]
-            X_train_fold = np.concatenate(X_train_fold_list, axis=0)
+    # 定义所有通道名称，用于保存
+    all_channel_names = [f"chest_{c}_{ax}" for c in ['ACC'] for ax in 'xyz'] + \
+                        [f"chest_{c}" for c in ['ECG', 'EDA', 'EMG', 'Resp', 'Temp']] + \
+                        [f"wrist_{c}_{ax}" for c in ['ACC'] for ax in 'xyz'] + \
+                        [f"wrist_{c}" for c in ['BVP', 'EDA', 'TEMP']]
 
-            # Reshape for channel-wise normalization: (N, L, C) -> (N*L, C)
-            data_reshaped = X_train_fold.reshape(-1, X_train_fold.shape[2])
+    with open(OUTPUT_PATH / '_channel_names.txt', 'w') as f:
+        for name in all_channel_names:
+            f.write(f"{name}\n")
 
-            # Calculate and save mean and std vectors
-            mean_vec = np.mean(data_reshaped, axis=0)
-            std_vec = np.std(data_reshaped, axis=0)
+    for sid in tqdm(subject_ids, desc="Preprocessing Subjects"):
+        # 1. 加载数据和协议
+        data = load_pkl(sid, WESAD_ROOT)
+        if data is None:
+            continue
 
-            norm_params_path = self.output_path / f'norm_params_for_{test_subject}.npz'
-            np.savez(norm_params_path, mean=mean_vec, std=std_vec)
+        protocol_df = parse_quest_csv(sid, WESAD_ROOT)
 
-        print(f"\nPreprocessing complete! All files saved in: {self.output_path}")
-
-    def _process_and_save_subject(self, subject_id):
-        data = load_pkl(subject_id, self.wesad_root)
-        if data is None: return
-
-        protocol_df = parse_quest_csv(subject_id, self.wesad_root)
-
-        # 1. Resample all signals to the target frequency
+        # 2. 重采样所有信号到 TARGET_FS
         resampled_signals = {}
-        all_signals_data = data[b'signal']
+        for dev, channels, fs_dict in [
+            ('chest', CHEST_CHANNELS, {c: CHEST_FS for c in CHEST_CHANNELS}),
+            ('wrist', WRIST_CHANNELS, WRIST_FS)
+        ]:
+            for channel in channels:
+                original_signal = data[b'signal'][dev.encode()][channel.encode()]
+                fs = fs_dict[channel]
+                duration = len(original_signal) / fs
+                new_len = int(duration * TARGET_FS)
 
-        # Chest signals
-        for channel in self.CHEST_CHANNELS:
-            original = all_signals_data[b'chest'][channel.encode()]
-            new_len = int((len(original) / self.CHEST_FS) * TARGET_FS)
-            if original.ndim > 1:
-                resampled_axes = [signal.resample(original[:, i], new_len) for i in range(original.shape[1])]
-                resampled_signals[f"chest_{channel}"] = np.column_stack(resampled_axes)
-            else:
-                resampled_signals[f"chest_{channel}"] = signal.resample(original, new_len)
+                if original_signal.ndim > 1:  # 处理多轴信号（如 ACC）
+                    resampled_axes = [signal.resample(original_signal[:, i], new_len) for i in
+                                      range(original_signal.shape[1])]
+                    resampled_signals[f"{dev}_{channel}"] = np.column_stack(resampled_axes)
+                else:
+                    resampled_signals[f"{dev}_{channel}"] = signal.resample(original_signal, new_len)
 
-        # Wrist signals
-        for channel in self.WRIST_CHANNELS:
-            original = all_signals_data[b'wrist'][channel.encode()]
-            fs = self.WRIST_FS[channel]
-            new_len = int((len(original) / fs) * TARGET_FS)
-            if original.ndim > 1:
-                resampled_axes = [signal.resample(original[:, i], new_len) for i in range(original.shape[1])]
-                resampled_signals[f"wrist_{channel}"] = np.column_stack(resampled_axes)
-            else:
-                resampled_signals[f"wrist_{channel}"] = signal.resample(original, new_len)
+        # 3. 生成窗口索引
+        target_windows, y = _get_windows(len(resampled_signals['chest_ECG']), protocol_df, TARGET_FS)
+        if not target_windows:
+            print(f"警告: 受试者 {sid} 未生成任何窗口，跳过。")
+            continue
 
-        # 2. Concatenate all resampled signals into one big array
-        concatenated_signals_list = []
-        self.channel_names = []  # Store the final order of channels
+        # 4. 拼接所有通道
+        all_resampled_data = []
+        for dev, channels in [('chest', CHEST_CHANNELS), ('wrist', WRIST_CHANNELS)]:
+            for channel in channels:
+                key = f"{dev}_{channel}"
+                s = resampled_signals[key]
+                if s.ndim == 1:
+                    s = s.reshape(-1, 1)
+                all_resampled_data.append(s)
 
-        # Define the final order of signals
-        signal_order = [f"chest_{c}" for c in self.CHEST_CHANNELS] + [f"wrist_{c}" for c in self.WRIST_CHANNELS]
+        concatenated_signals = np.concatenate(all_resampled_data, axis=1)
 
-        for key in signal_order:
-            s = resampled_signals[key]
-            if s.ndim == 1: s = s.reshape(-1, 1)
-            concatenated_signals_list.append(s)
-
-            if s.shape[1] > 1:
-                for i in range(s.shape[1]): self.channel_names.append(f"{key}_{'xyz'[i]}")
-            else:
-                self.channel_names.append(key)
-
-        concatenated_signals = np.concatenate(concatenated_signals_list, axis=1)
-
-        # 3. Generate windows based on the protocol
-        windows, labels = self._get_windows_from_protocol(len(concatenated_signals), protocol_df)
-
+        # 5. 根据窗口切片
         window_len_samples = int(WINDOW_SEC * TARGET_FS)
-        X_subject = np.zeros((len(windows), window_len_samples, concatenated_signals.shape[1]))
+        X = np.zeros((len(target_windows), window_len_samples, len(all_channel_names)))
+        for i, (start, end) in enumerate(target_windows):
+            X[i, :, :] = concatenated_signals[start:end, :]
 
-        for i, (start, end) in enumerate(windows):
-            X_subject[i] = concatenated_signals[start:end, :]
+        # 6. 保存
+        np.save(OUTPUT_PATH / f'{sid}_X.npy', X)
+        np.save(OUTPUT_PATH / f'{sid}_y.npy', y)
+        print(f"  - 受试者 {sid}: 已生成 {X.shape[0]} 个窗口，形状为 {X.shape[1:]}")
 
-        np.save(self.output_path / f'{subject_id}_X.npy', X_subject)
-        np.save(self.output_path / f'{subject_id}_y.npy', labels)
-        # Also save channel names for reference
-        if "S2" in subject_id:  # Only save once
-            np.save(self.output_path / 'channel_names.npy', np.array(self.channel_names))
-
-    def _get_windows_from_protocol(self, data_len, protocol_df):
-        windows, labels = [], []
-        task_to_label_map = {'Base': 1, 'TSST': 2, 'Fun': 3, 'Medi1': 4, 'Medi2': 4}
-
-        for _, row in protocol_df.iterrows():
-            task = row['task'].replace(" ", "").strip()
-            original_label = task_to_label_map.get(task)
-            if original_label is None: continue
-
-            label = LABEL_MAP.get(original_label)
-            if label is None: continue
-
-            start_idx = int(row['start_min'] * 60 * TARGET_FS)
-            end_idx = int(row['end_min'] * 60 * TARGET_FS)
-
-            step_sec = TASK_STEPS_SEC.get(row['task'], DEFAULT_STEP_SEC)
-            step_samples = int(step_sec * TARGET_FS)
-            window_samples = int(WINDOW_SEC * TARGET_FS)
-
-            if end_idx > data_len: end_idx = data_len
-
-            for i in range(start_idx, end_idx - window_samples + 1, step_samples):
-                windows.append((i, i + window_samples))
-                labels.append(label)
-
-        return windows, np.array(labels)
+    print(f"\n预处理完成！结果已保存至: {OUTPUT_PATH}")
 
 
 if __name__ == '__main__':
-    preprocessor = WesadPreprocessor()
-    preprocessor.process_all_subjects()
+    run_preprocessing()
