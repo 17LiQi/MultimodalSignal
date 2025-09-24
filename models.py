@@ -4,109 +4,44 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class CnnGruModel(nn.Module):
-    def __init__(self, in_channels, num_classes, **model_args):
-        """
-        CNN-GRU 混合模型，用于时序分类。
-        params: 包含 cnn_out_channels, gru_hidden_size 等的字典
-        """
-        super(CnnGruModel, self).__init__()
-
-        cnn_out_channels = model_args.get('cnn_out_channels', 32)
-        gru_hidden_size = model_args.get('gru_hidden_size', 64)
-        gru_num_layers = model_args.get('gru_num_layers', 2)
-        dropout = model_args.get('dropout', 0.5)
-
-        # --- CNN 特征提取器 ---
-        self.cnn_encoder = nn.Sequential(
-            nn.Conv1d(in_channels, 16, kernel_size=7, stride=2, padding=3, bias=False),
-            nn.InstanceNorm1d(16),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=3, stride=2, padding=1),
-
-            nn.Conv1d(16, cnn_out_channels, kernel_size=5, stride=2, padding=2, bias=False),
-            nn.InstanceNorm1d(cnn_out_channels),
-            nn.ReLU(),
-            nn.MaxPool1d(kernel_size=3, stride=2, padding=1)
-        )
-
-        # --- GRU 时序建模器 ---
-        # CNN的输出将作为GRU的输入
-        # GRU的输入形状: (seq_len, batch_size, input_size)
-        self.gru = nn.GRU(
-            input_size=cnn_out_channels,
-            hidden_size=gru_hidden_size,
-            num_layers=gru_num_layers,
-            batch_first=True,  # 让输入形状为 (batch_size, seq_len, input_size)
-            bidirectional=True,  # 使用双向GRU以捕捉前后文信息
-            dropout=dropout if gru_num_layers > 1 else 0
-        )
-
-        # --- 分类器 ---
-        # 双向GRU的输出是隐藏状态的两倍
-        self.classifier = nn.Sequential(
-            nn.Linear(gru_hidden_size * 2, 64),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(64, num_classes)
-        )
-
-    def forward(self, x):
-        # x 初始形状: (batch_size, in_channels, seq_len)
-
-        # 1. 通过 CNN 提取特征
-        # 输出形状: (batch_size, cnn_out_channels, new_seq_len)
-        x = self.cnn_encoder(x)
-
-        # 2. 调整形状以适应 GRU
-        # (batch_size, cnn_out_channels, new_seq_len) -> (batch_size, new_seq_len, cnn_out_channels)
-        x = x.permute(0, 2, 1)
-
-        # 3. 通过 GRU 学习时序依赖
-        # 我们只关心GRU的输出，不关心最后的隐藏状态
-        # outputs 形状: (batch_size, seq_len, num_directions * hidden_size)
-        outputs, _ = self.gru(x)
-
-        # 4. 获取最后一个时间步的输出作为整个序列的表示
-        # last_output 形状: (batch_size, num_directions * hidden_size)
-        last_output = outputs[:, -1, :]
-
-        # 5. 通过分类器得到最终预测
-        logits = self.classifier(last_output)
-
-        return logits
-
 class ChannelAttention(nn.Module):
-    """一个简单的通道注意力模块"""
+    """
+    通道注意力模块：学习给不同通道分配不同的重要性权重。
+    """
 
     def __init__(self, in_channels, reduction_ratio=4):
         super(ChannelAttention, self).__init__()
+        # 使用自适应平均池化将每个通道的时间维度压缩为1
         self.avg_pool = nn.AdaptiveAvgPool1d(1)
+        # 使用一个小型MLP来学习通道间的非线性关系
         self.fc = nn.Sequential(
             nn.Linear(in_channels, in_channels // reduction_ratio, bias=False),
             nn.ReLU(inplace=True),
             nn.Linear(in_channels // reduction_ratio, in_channels, bias=False),
-            nn.Sigmoid()
+            nn.Sigmoid()  # Sigmoid将权重缩放到0-1之间
         )
 
     def forward(self, x):
         # x shape: (batch, channels, length)
         b, c, _ = x.size()
-        y = self.avg_pool(x).view(b, c)  # (batch, channels)
-        y = self.fc(y).view(b, c, 1)  # (batch, channels, 1)
-        return x * y.expand_as(x)  # (batch, channels, length)
+        # y shape: (batch, channels) -> (batch, channels, 1)
+        y = self.avg_pool(x).view(b, c)
+        y = self.fc(y).view(b, c, 1)
+        # 将原始输入 x 与学习到的通道权重 y 相乘
+        return x * y.expand_as(x)
 
 
 class CnnGruAttentionModel(nn.Module):
-    def __init__(self, in_channels, num_classes, cnn_out_channels=32, gru_hidden_size=64, gru_num_layers=2,
-                 dropout=0.5):
+    """
+    端到端模型：结合了通道注意力、CNN和双向GRU。
+    """
+
+    def __init__(self, in_channels, num_classes,
+                 cnn_out_channels=32, gru_hidden_size=64, gru_num_layers=2, dropout=0.5):
         super(CnnGruAttentionModel, self).__init__()
 
-        # --- 通道注意力模块 ---
         self.channel_attention = ChannelAttention(in_channels=in_channels)
 
-        # --- CNN 特征提取器 ---
-        # 输入通道数仍然是 in_channels
         self.cnn_encoder = nn.Sequential(
             nn.Conv1d(in_channels, 16, kernel_size=7, stride=2, padding=3, bias=False),
             nn.BatchNorm1d(16),
@@ -118,7 +53,6 @@ class CnnGruAttentionModel(nn.Module):
             nn.MaxPool1d(kernel_size=3, stride=2, padding=1)
         )
 
-        # --- GRU 时序建模器 ---
         self.gru = nn.GRU(
             input_size=cnn_out_channels,
             hidden_size=gru_hidden_size,
@@ -128,7 +62,7 @@ class CnnGruAttentionModel(nn.Module):
             dropout=dropout if gru_num_layers > 1 else 0
         )
 
-        # --- 分类器 ---
+        # 最终的分类器，双向GRU的输出维度是 hidden_size * 2
         self.classifier = nn.Sequential(
             nn.Linear(gru_hidden_size * 2, 64),
             nn.ReLU(),
@@ -137,24 +71,99 @@ class CnnGruAttentionModel(nn.Module):
         )
 
     def forward(self, x):
-        # x 初始形状: (batch_size, in_channels, seq_len)
-
-        # 1. 首先通过通道注意力模块，学习通道权重并重新加权输入特征
+        # x shape: (batch, channels, seq_len)
         x = self.channel_attention(x)
-
-        # 2. 通过 CNN 提取特征
         x = self.cnn_encoder(x)
-
-        # 3. 调整形状以适应 GRU
         x = x.permute(0, 2, 1)
-
-        # 4. 通过 GRU 学习时序依赖
         outputs, _ = self.gru(x)
-
-        # 5. 获取最后一个时间步的输出
         last_output = outputs[:, -1, :]
-
-        # 6. 通过分类器得到最终预测
         logits = self.classifier(last_output)
+        return logits
+
+
+class FeatureProcessor(nn.Module):
+    """
+    手工特征处理器：一个简单的多层感知机(MLP)，用于提取手工特征中的高阶信息。
+    """
+
+    def __init__(self, in_features, hidden_dims, out_features, dropout=0.5):
+        super(FeatureProcessor, self).__init__()
+        layers = []
+        for hidden_dim in hidden_dims:
+            layers.append(nn.Linear(in_features, hidden_dim))
+            layers.append(nn.BatchNorm1d(hidden_dim))
+            layers.append(nn.ReLU())
+            layers.append(nn.Dropout(dropout))
+            in_features = hidden_dim
+        layers.append(nn.Linear(in_features, out_features))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x):
+        # x shape: (batch, in_features)
+        return self.net(x)
+
+
+class HybridModel(nn.Module):
+    """
+    混合模型：将端到端分支和手工特征分支进行融合。
+    """
+
+    def __init__(self, in_channels, num_classes, num_handcrafted_features,
+                 # 参数传递给子模块
+                 cnn_out_channels=32, gru_hidden_size=64, gru_num_layers=2, dropout=0.5,
+                 feature_hidden_dims=[32], feature_out_dim=16):
+        super(HybridModel, self).__init__()
+
+        # --- 1. 端到端分支 ---
+        # 我们直接在这里实例化 CnnGruAttentionModel
+        self.raw_signal_model = CnnGruAttentionModel(
+            in_channels=in_channels,
+            num_classes=num_classes,  # 临时传入，后续会被替换
+            cnn_out_channels=cnn_out_channels,
+            gru_hidden_size=gru_hidden_size,
+            gru_num_layers=gru_num_layers,
+            dropout=dropout
+        )
+
+        # --- 移除原始模型的分类器，把它变成一个纯粹的特征提取器 ---
+        # 我们需要知道原始分类器前的特征维度，这里是 gru_hidden_size * 2
+        raw_feature_dim = gru_hidden_size * 2
+        self.raw_signal_model.classifier = nn.Identity()  # 替换为一个什么都不做的层
+
+        # --- 2. 手工特征分支 ---
+        self.feature_processor = FeatureProcessor(
+            in_features=num_handcrafted_features,
+            hidden_dims=feature_hidden_dims,
+            out_features=feature_out_dim
+        )
+
+        # --- 3. 融合后的最终分类器 ---
+        # 输入维度是两个分支输出特征维度之和
+        fused_feature_dim = raw_feature_dim + feature_out_dim
+        self.final_classifier = nn.Sequential(
+            nn.Linear(fused_feature_dim, 64),
+            nn.BatchNorm1d(64),  # 在融合后加一个BN层，有助于稳定训练
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(64, num_classes)
+        )
+
+    def forward(self, inputs):
+        # 解包输入
+        x_raw, x_feat = inputs
+        # x_raw shape: (batch, in_channels, seq_len)
+        # x_feat shape: (batch, num_handcrafted_features)
+
+        # 1. 通过端到端分支提取高级时序特征
+        raw_features = self.raw_signal_model(x_raw)  # -> (batch, gru_hidden_size * 2)
+
+        # 2. 通过特征分支处理手工特征
+        handcrafted_features = self.feature_processor(x_feat)  # -> (batch, feature_out_dim)
+
+        # 3. 拼接（Concatenate）两种特征
+        fused_features = torch.cat([raw_features, handcrafted_features], dim=1)
+
+        # 4. 通过最终分类器得到预测
+        logits = self.final_classifier(fused_features)
 
         return logits

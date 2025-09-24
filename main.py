@@ -1,95 +1,170 @@
+# file: main.py
 import torch
 import numpy as np
 from pathlib import Path
 from datetime import datetime
-
-from fontTools.varLib.avarPlanner import WEIGHTS
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
+from dataset import WesadDataset, HybridDataset
+from models import CnnGruAttentionModel, HybridModel
+from trainer import Trainer
+import pandas as pd
+import warnings
 
-from dataset import WesadDataset
-from models import CnnGruModel, CnnGruAttentionModel  # 导入模型
-from trainer import Trainer  # 导入训练器
+warnings.filterwarnings("ignore", message="Initializing zero-element tensors is a no-op")
 
-# --- 1. 全局参数直接定义 ---
-# 实验设置
-MODEL_TO_USE = 'cnn_gru_attention'  # 'cnn_gru' / 'cnn_gru_attention'
-RUN_NAME = f"{MODEL_TO_USE}"  # 用于命名输出文件夹
-SEED = 42
+# --- 配置区 ---
+USE_HYBRID = False  # True: 使用手工特征 (hybrid模型, chest_raw_align + chest_feature); False: 使用原始信号 (cnn_gru_attention模型, chest_raw)
+CLASSIFICATION_MODE = 'ternary'  # 'binary' 2类 or 'ternary' 3类
+NUM_CLASSES = 2 if CLASSIFICATION_MODE == 'binary' else 3
 
-# 数据集参数
+# 数据路径配置 (根据模式动态设置)
 PROCESSED_DATA_PATH = Path('./data')
-ALL_SUBJECTS = [f"S{i}" for i in range(2, 18) if i != 12]
-# 消融实验在这里修改:
-# CHANNELS_TO_USE = ['chest_ACC_x', 'chest_ACC_y', 'chest_ACC_z', 'chest_ECG', 'chest_EDA', 'chest_EMG', 'chest_Resp']
-CHANNELS_TO_USE = [ 'chest_ECG', 'chest_EDA', 'chest_EMG', 'chest_Resp','wrist_BVP', 'wrist_EDA']
+EARLY_DATA_PATH = PROCESSED_DATA_PATH / 'chest_raw_align' if USE_HYBRID else PROCESSED_DATA_PATH / 'chest_raw'
+FEATURE_DATA_PATH = PROCESSED_DATA_PATH / 'chest_feature'
+MODEL_TO_USE = 'cnn_gru_attention'  # 'cnn_gru_attention' or 'hybrid'
 
-# 训练参数
-EPOCHS = 50
+# 通道和特征配置
+# CHANNELS_TO_USE = ['chest_ECG', 'chest_EDA']
+CHANNELS_TO_USE = ['chest_ECG', 'chest_EDA', 'chest_Resp']
+
+ALL_AVAILABLE_FEATURES = [
+    'HRV_RMSSD', 'HRV_SDNN', 'HRV_LFHF', 'HRV_HF', 'HRV_SampEn',
+    'EDA_SCR_Peaks_N', 'EDA_Tonic_Slope',
+    'RESP_Rate_Mean', 'RESP_RRV_SDNN',
+    'EMG_Amplitude_Mean'
+]
+FEATURES_TO_USE = [
+    'RESP_RRV_SDNN',
+    'EDA_SCR_Peaks_N',
+    'HRV_RMSSD']
+NUM_HANDCRAFTED_FEATURES = len(FEATURES_TO_USE) if FEATURES_TO_USE is not None else len(ALL_AVAILABLE_FEATURES)
+
+
+RUN_NAME = MODEL_TO_USE
+# 模型参数
+SEED = 42
+NUM_WORKERS = 0
+EPOCHS = 100
 BATCH_SIZE = 64
 LEARNING_RATE = 0.001
-NUM_WORKERS = 0
 PATIENCE = 20
 WEIGHTS_DECAY = 1e-4
 
-# 模型参数
-NUM_CLASSES = 3
 MODEL_PARAMS = {
-    'cnn_out_channels': 32,
-    'gru_hidden_size': 64,
-    'gru_num_layers': 2,
-    'dropout': 0.5
+    'cnn_gru_attention': {
+        'cnn_out_channels': 32,
+        'gru_hidden_size': 64,
+        'gru_num_layers': 2,
+        'dropout': 0.5
+    },
+    # 'hybrid': {
+    #     'cnn_out_channels': 32,
+    #     'gru_hidden_size': 64,
+    #     'gru_num_layers': 2,
+    #     'dropout': 0.5,
+    #     'feature_hidden_dims': [32],
+    #     'feature_out_dim': 16
+    # }
+    'hybrid': {
+        'cnn_out_channels': 32,
+        'gru_hidden_size': 64,
+        'gru_num_layers': 2,
+        'dropout': 0.5,
+        'feature_hidden_dims': [64],
+        'feature_out_dim': 32
+    }
 }
+
+ALL_SUBJECTS = [f"S{i}" for i in range(2, 18) if i != 12]
 
 
 def main():
     torch.manual_seed(SEED)
     np.random.seed(SEED)
-
-    # --- 创建输出目录 ---
     run_timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     run_output_dir = Path('./output') / RUN_NAME / f'run_{run_timestamp}'
     run_output_dir.mkdir(parents=True, exist_ok=True)
     print(f"====== 运行结果将保存至: {run_output_dir} ======")
 
-    # 加载所有通道的名称
-    with open(PROCESSED_DATA_PATH / '_channel_names.txt', 'r') as f:
+    with open(EARLY_DATA_PATH / '_channel_names.txt', 'r') as f:
         all_channel_names = [line.strip() for line in f]
 
-    # --- 执行LOSOCV循环 ---
     results = []
-    for subject_to_test in ALL_SUBJECTS:  # 移除 tqdm
-        print(f"Processing subject: {subject_to_test}")  # 添加简单的打印提示
+    for subject_to_test in ALL_SUBJECTS:
+        print(f"Processing subject: {subject_to_test}")
         fold_output_dir = run_output_dir / f'fold_test_on_{subject_to_test}'
         fold_output_dir.mkdir(parents=True, exist_ok=True)
-
         train_val_subjects = [s for s in ALL_SUBJECTS if s != subject_to_test]
         train_subjects, val_subjects = train_test_split(train_val_subjects, test_size=0.2, random_state=SEED)
 
-        # 创建数据集
-        train_ds = WesadDataset(PROCESSED_DATA_PATH, train_subjects, CHANNELS_TO_USE, all_channel_names)
-        val_ds = WesadDataset(PROCESSED_DATA_PATH, val_subjects, CHANNELS_TO_USE, all_channel_names)
-        test_ds = WesadDataset(PROCESSED_DATA_PATH, [subject_to_test], CHANNELS_TO_USE, all_channel_names)
+        if MODEL_TO_USE == 'hybrid':
+            train_ds = HybridDataset(
+                early_fusion_path=EARLY_DATA_PATH,
+                feature_fusion_path=FEATURE_DATA_PATH,
+                subjects=train_subjects,
+                channels_to_use=CHANNELS_TO_USE,
+                all_channel_names=all_channel_names,
+                features_to_use=FEATURES_TO_USE,
+                classification_mode=CLASSIFICATION_MODE
+            )
+            val_ds = HybridDataset(
+                early_fusion_path=EARLY_DATA_PATH,
+                feature_fusion_path=FEATURE_DATA_PATH,
+                subjects=val_subjects,
+                channels_to_use=CHANNELS_TO_USE,
+                all_channel_names=all_channel_names,
+                features_to_use=FEATURES_TO_USE,
+                classification_mode=CLASSIFICATION_MODE
+            )
+            test_ds = HybridDataset(
+                early_fusion_path=EARLY_DATA_PATH,
+                feature_fusion_path=FEATURE_DATA_PATH,
+                subjects=[subject_to_test],
+                channels_to_use=CHANNELS_TO_USE,
+                all_channel_names=all_channel_names,
+                features_to_use=FEATURES_TO_USE,
+                classification_mode=CLASSIFICATION_MODE
+            )
+        else:
+            train_ds = WesadDataset(
+                EARLY_DATA_PATH, train_subjects, CHANNELS_TO_USE, all_channel_names,
+                classification_mode=CLASSIFICATION_MODE
+            )
+            val_ds = WesadDataset(
+                EARLY_DATA_PATH, val_subjects, CHANNELS_TO_USE, all_channel_names,
+                classification_mode=CLASSIFICATION_MODE
+            )
+            test_ds = WesadDataset(
+                EARLY_DATA_PATH, [subject_to_test], CHANNELS_TO_USE, all_channel_names,
+                classification_mode=CLASSIFICATION_MODE
+            )
 
         train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS)
         val_loader = DataLoader(val_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS)
         test_loader = DataLoader(test_ds, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS)
 
-        # 创建模型
-        if MODEL_TO_USE == 'cnn_gru':
-            model = CnnGruModel(in_channels=len(CHANNELS_TO_USE), num_classes=NUM_CLASSES, **MODEL_PARAMS)
-        elif MODEL_TO_USE == 'cnn_gru_attention':
-            model = CnnGruAttentionModel(in_channels=len(CHANNELS_TO_USE), num_classes=NUM_CLASSES, **MODEL_PARAMS)
+        current_model_params = MODEL_PARAMS[MODEL_TO_USE]
+
+        # ----------- 创建模型实例 -----------------
+        if MODEL_TO_USE == 'cnn_gru_attention':
+            model = CnnGruAttentionModel(in_channels=len(CHANNELS_TO_USE), num_classes=NUM_CLASSES,
+                                         **current_model_params)
+        elif MODEL_TO_USE == 'hybrid':
+            num_handcrafted_features = len(FEATURES_TO_USE) if FEATURES_TO_USE is not None else 10
+            model = HybridModel(in_channels=len(CHANNELS_TO_USE),
+                                num_classes=NUM_CLASSES,
+                                num_handcrafted_features=num_handcrafted_features,
+                                **current_model_params)
         else:
             raise ValueError(f"未知模型: {MODEL_TO_USE}")
 
-        # 创建训练器并开始训练
         config_dict = {
             'trainer': {
                 'epochs': EPOCHS,
                 'learning_rate': LEARNING_RATE,
                 'early_stopping': {'enabled': True, 'patience': PATIENCE, 'delta': 0},
-                'weight_decay': WEIGHTS_DECAY
+                'weight_decay': WEIGHTS_DECAY,
             }
         }
         trainer = Trainer(model, fold_output_dir, config_dict)

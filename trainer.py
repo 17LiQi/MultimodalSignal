@@ -127,11 +127,22 @@ class Trainer:
             # 训练进度条
             progress_bar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{self.epochs} [Training]")
 
-            for inputs, labels in progress_bar:
-                inputs = inputs.to(self.device)
+            for batch in progress_bar:
+                # 从batch中解包输入和标签
+                inputs, labels = batch
+
+                # 判断inputs是否为元组或列表 (对应HybridDataset)
+                if isinstance(inputs, (list, tuple)):
+                    # 遍历列表/元组，将每个张量移动到设备
+                    inputs = [i.to(self.device) for i in inputs]
+                else:
+                    # 否则，直接移动 (兼容旧的WesadDataset)
+                    inputs = inputs.to(self.device)
+
                 labels = labels.to(self.device)
 
                 self.optimizer.zero_grad()
+                # 将解包后的inputs直接传递给模型
                 outputs = self.model(inputs)
                 loss = self.criterion(outputs, labels)
                 loss.backward()
@@ -184,21 +195,40 @@ class Trainer:
         total_loss = 0.0
         all_preds = []
         all_labels = []
+        all_probas = []
 
         with torch.no_grad():
-            for inputs, labels in data_loader:
-                inputs = inputs.to(self.device)
+            # 这里的 for 循环也需要修复
+            for batch in data_loader:
+                # 从batch中解包输入和标签
+                inputs, labels = batch
+
+                # 判断inputs是否为元组或列表 (对应HybridDataset)
+                if isinstance(inputs, (list, tuple)):
+                    # 遍历列表/元组，将每个张量移动到设备
+                    inputs = [i.to(self.device) for i in inputs]
+                else:
+                    # 否则，直接移动 (兼容旧的WesadDataset)
+                    inputs = inputs.to(self.device)
+
                 labels = labels.to(self.device)
 
+                # 将解包后的inputs直接传递给模型
                 outputs = self.model(inputs)
                 loss = self.criterion(outputs, labels)
 
                 batch_size = labels.size(0)
                 total_loss += loss.item() * batch_size
 
-                _, preds = torch.max(outputs, 1)
+                # 计算概率和预测
+                probas = torch.softmax(outputs, dim=1)
+                _, preds = torch.max(probas, 1)
+
+                all_probas.append(probas.cpu().numpy())
                 all_preds.extend(preds.cpu().numpy())
                 all_labels.extend(labels.cpu().numpy())
+
+        all_probas = np.concatenate(all_probas, axis=0)
 
         loss = total_loss / len(data_loader.dataset)
         acc = accuracy_score(all_labels, all_preds)
@@ -206,10 +236,12 @@ class Trainer:
 
         if is_test:
             self.plot_confusion_matrix(all_labels, all_preds, filename="test_confusion_matrix.png")
-            self._log(f"\n--- 最终测试结果 ---")
+            self._log(f"\n--- 最终测试结果 (模型原始输出) ---")
             self._log(f"测试损失: {loss:.4f} | 测试Acc: {acc:.4f} | 测试F1: {f1:.4f}")
+            return loss, acc, f1
 
         if is_val:
+            # 验证阶段也需要返回概率和标签，以便未来可能的分析
             return loss, acc, f1, all_preds, all_labels
 
         return loss, acc, f1
@@ -218,9 +250,18 @@ class Trainer:
         try:
             cm = confusion_matrix(true_labels, pred_labels)
             plt.figure(figsize=(8, 6))
+
+            # 根据您的具体任务设置标签
+            # 如果是二分类压力检测任务
+            if len(np.unique(true_labels)) == 2:
+                labels = ['Non-Stress', 'Stress']
+            else:
+                # 三分类情绪识别任务
+                labels = ['Neutral/Baseline', 'Amusement', 'Stress/TSST']
+
             sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                        xticklabels=['Neutral', 'Amusement', 'Stress'],
-                        yticklabels=['Neutral', 'Amusement', 'Stress'])
+                        xticklabels=labels,
+                        yticklabels=labels)
             plt.xlabel('Predicted Label')
             plt.ylabel('True Label')
             plt.title('Confusion Matrix')
